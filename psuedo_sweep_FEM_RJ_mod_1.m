@@ -49,7 +49,7 @@ x_sweeping = linspace(0,1,Nx);
 
 K = @(x,y) OMEGA ./ c(x,y);
 
-invM = spdiags(1 ./ spdiags(M), 0, size(M, 1), size(M, 2));
+invM = spdiags(1 ./ spdiags(M, 0), 0, size(M, 1), size(M, 2));
 
 %IC
 
@@ -80,7 +80,7 @@ for j=1:Nx-1
     end
         
     % Crank-Nicolson
-    %u(:,j+1) = (I - dx/2 * DtN) \ ((I + dx/2 * DtN) * u(:,j));
+    u(:,j+1) = (I - dx/2 * DtN) \ ((I + dx/2 * DtN) * u(:,j));
             
 end
 
