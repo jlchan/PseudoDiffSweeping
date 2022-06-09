@@ -4,7 +4,7 @@
 
 W = 1;              % Width of domain
 L = 1;              % Length of domain
-OMEGA = 100*pi;     % Angular frequency
+OMEGA = 10*pi;     % Angular frequency
 
 %Determine accuracy 
 PPWx = 30;          % Points per wavelength in x-direction (marching)
@@ -30,9 +30,9 @@ fprintf('Nx x Ny = %i x %i \n', Nx, Ny);
 
 %%
 
-N = 2;
+N = 4;
 VX = linspace(-.5, .5, ceil(Ny / N)+1);
-k = @(x) OMEGA / c(x, 0);
+k = @(x) OMEGA ./ c(x, 0);
 f = @(x) exp(-x);
 [M, A, b, x_FE, global_to_local_ids] = compute_FE_system(N, VX, k, f);
 
