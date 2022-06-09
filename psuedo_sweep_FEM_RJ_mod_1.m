@@ -108,14 +108,12 @@ axis image
 shading interp;
 hcolor = colorbar;
 caxis([-1 1]);
+
 contour(x,y,c(x,y),10,'w','linewidth',1); hold off;
 view(0,90);
 xlim([0 L]);
 ylim([-W W]/2);
-xticks([0:W/5:L]);
-yticks([-W/2:W/10:W/2]);
 title('Real part of wave field');
-
 
 h = gca;
 h.FontSize = 10;
