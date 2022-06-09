@@ -19,6 +19,8 @@ Nx = round(PPWx * L / lambda);                      % N points in x-direction
 dy = W / (Ny - 1);                                  % mesh size in y-direction
 dx = L / (Nx - 1);                                  % mesh size in x-direction
 
+c = @(x, y) c0 * (1 - 0.25 * peaks((x - W/2) * 10, (y - 0.0) * 10) / 8.1006);
+
 fprintf('--------------------------------------------------- \n');
 fprintf('Pseudo-diff Order = %i \n', ORDER);
 fprintf('PPW x-axis = %.2g \n', lambda/dx);
@@ -26,10 +28,20 @@ fprintf('PPW y-axis = %.2g \n', lambda/dy);
 fprintf('Nx x Ny = %i x %i \n', Nx, Ny);
 
 
+%%
+
+N = 2;
+VX = linspace(-.5, .5, ceil(Ny / N)+1);
+k = @(x) OMEGA / c(x, 0);
+f = @(x) exp(-x);
+[M, A, b, x_FE, global_to_local_ids] = compute_FE_system(N, VX, k, f);
+
 %Defining arrays and allocating memory
+
+Ny = length(x_FE);
 x = zeros(Ny, Nx);           % x mesh
 y = zeros(Ny, Nx);           % y mesh
-I = speye(Ny, Ny);           % Identity matrix
+I = speye(Ny, Ny);  % Identity matrix
 
 for i = 1:Ny
     for j = 1:Nx
@@ -38,16 +50,13 @@ for i = 1:Ny
     end
 end
 
-c = @(x, y) c0 * (1 - 0.25 * peaks((x - W/2) * 10, (y - 0.0) * 10) / 8.1006);
-K = OMEGA ./ c(x,y);
+x_sweeping = linspace(0,1,Nx);
+
+[x,y] = meshgrid(x_sweeping, x_FE);
 
 %%
 
-N = 2;
-VX = linspace(-.5, .5, ceil(Ny / N)+1);
-k = @(x) OMEGA / c(x, 0);
-f = @(x) exp(-x);
-[M, A, b, x, global_to_local_ids] = compute_FE_system(N, VX, k, f);
+K = OMEGA ./ c(x,y);
 
 invM = spdiags(1 ./ spdiags(M), 0, size(M, 1), size(M, 2));
 LB = invM * A;
