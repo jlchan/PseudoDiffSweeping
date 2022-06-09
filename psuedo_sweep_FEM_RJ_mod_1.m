@@ -34,71 +34,56 @@ N = 4;
 VX = linspace(-.5, .5, ceil(Ny / N)+1);
 k = @(x) OMEGA ./ c(x, 0);
 f = @(x) exp(-x);
-[M, A, b, x_FE, global_to_local_ids] = compute_FE_system(N, VX, k, f);
+[M, ~, ~, y_FE, global_to_local_ids] = compute_FE_system(N, VX, k, f);
 
 %Defining arrays and allocating memory
 
-Ny = length(x_FE);
-x = zeros(Ny, Nx);           % x mesh
-y = zeros(Ny, Nx);           % y mesh
+Ny = length(y_FE);
 I = speye(Ny, Ny);  % Identity matrix
-
-for i = 1:Ny
-    for j = 1:Nx
-        x(i, j) = dx * (j - 1);
-        y(i, j) = -W/2 + dy * (i-1); % centers at (-5, 5)        
-    end
-end
 
 x_sweeping = linspace(0,1,Nx);
 
-[x,y] = meshgrid(x_sweeping, x_FE);
+[x,y] = meshgrid(x_sweeping, y_FE);
 
-%%
+%Beginning simulation
 
-K = OMEGA ./ c(x,y);
+K = @(x,y) OMEGA ./ c(x,y);
 
 invM = spdiags(1 ./ spdiags(M), 0, size(M, 1), size(M, 2));
-LB = invM * A;
 
-ndofs = length(x);
-u = zeros(ndofs, Nx);
-u(:, 1) = exp(1i * K(x, 0) .* x);
+%IC
+
+u = zeros(Ny, Nx);
+u(:, 1) = exp(1i * K(y_FE, 0) .* y_FE);
+
 
 %%
-
-u = zeros(Ny, Nx);           % wave field
-u_energy = zeros(1, Nx);
-
-%BOUNDARY CONDITION at x=0 -----------------
-u(:,1) = exp(1i * K(:,1) .* x(:,1));
-u_energy(1) = 1;
-
-%1D Laplace operator
-LB = spdiags([1 -2 1] .* ones(Ny,1), -1:1, Ny, Ny) / dy^2;    % Laplacian for variable wave speed
-% Neumann BCs
-LB(1,1) = -LB(2,1); LB(1,2) = LB(2,1);
-LB(Ny,Ny) = -LB(Ny-1,Ny); 
-LB(Ny,Ny-1) = -LB(Ny,Ny);
 
 %SWEEPING IN THE X-DIRECTION
 tic;
 for j=1:Nx-1
     
-    A = spdiags(1 ./ K(:,j), 0, Ny, Ny) * LB * spdiags(1./ K(:,j), 0, Ny, Ny);  
+    k = @(x) OMEGA ./ c(x, x_sweeping(j));
+    
+    f = @(x) 0;
+    
+    [M, A, b, y_FE, global_to_local_ids] = compute_FE_system(N, VX, k, f);
+    
+    A = invM * A;     %overwrite A
     
     DtN = sparse(Ny, Ny);
+    
     for o = 1:ORDER
-        DtN = DtN + sqrt_taylor_coeff(o-1) * A^(o-1);
-    end
-    DtN = spdiags(sqrt(1i * K(:,j)), 0, Ny, Ny) * DtN * spdiags(sqrt(1i * K(:,j)), 0, Ny, Ny);
-    
-    % Crank-Nicolson
-    u(:,j+1) = (I - dx/2 * DtN) \ ((I + dx/2 * DtN) * u(:,j));
         
-    u_energy(j+1) = norm(u(:,j+1)) / norm(u(:,1));
-    
+        DtN = DtN + sqrt_taylor_coeff(o-1) * A^(o-1);
+   
+    end
+        
+    % Crank-Nicolson
+    %u(:,j+1) = (I - dx/2 * DtN) \ ((I + dx/2 * DtN) * u(:,j));
+            
 end
+
 cpu_time = toc;
 fprintf('Calculation CPU time = %0.2f \n', cpu_time);
 
