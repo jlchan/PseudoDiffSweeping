@@ -1,6 +1,6 @@
-%    
-    %modified by Jesse Chan 2 June 2022
-    %modified by Raven Shane Johnson ___
+%written by Sebastian Acosta    
+    %modified by Jesse Chan 9 June 2022
+    %modified by Raven Shane Johnson 15 June 2022
 
 W = 1;              % Width of domain
 L = 1;              % Length of domain
@@ -11,8 +11,9 @@ PPWx = 30;          % Points per wavelength in x-direction (marching)
 PPWy = 4;          % Points per wavelength in y-direction (tangential)
 ORDER = 4;          % Pseudo-diff order
 
-c0 = 1;                                               % reference wavespeed
-lambda = 2 * pi * c0 / OMEGA;                         % reference wavelength                 
+c0 = 1;                                             % reference wavespeed
+lambda = 2 * pi * c0 / OMEGA;                       % reference wavelength                 
+
 Ny = round(PPWy * W / lambda);                      % N points in y-direction
 Nx = round(PPWx * L / lambda);                      % N points in x-direction
 
@@ -46,72 +47,117 @@ x_sweeping = linspace(0,1,Nx);
 
 %Beginning simulation
 
-K = @(x,y) OMEGA ./ c(x,y);
-
 invM = spdiags(1 ./ spdiags(M, 0), 0, size(M, 1), size(M, 2));
 
 % IC
 u = zeros(Ny, Nx);
-u(:, 1) = exp(1i * K(0, y_FE) .* x(:, 1));
 
+u(:, 1) = exp(1i * k(y_FE) .* y_FE);
 
 %%
 
 %SWEEPING IN THE X-DIRECTION
+
 tic;
+
 for j=1:Nx-1
     
-    k = @(x) K(x_sweeping(j), x);
-    inv_k_sq = @(x) 1 ./ K(x_sweeping(j), x).^2;
+    k = @(x) OMEGA ./ c(x_sweeping(j), x);
+    inv_k_sq = @(x) 1 ./ k(x).^2;
     [~, LB, ~, ~, ~] = compute_FE_system(N, VX, inv_k_sq, f_zero);
     
     A = invM * LB; 
+    
+    [m,n] = size(A);
     
     % cond(A) = O(1/h^2)
     % sqrt(1 + A) = sum_i c_o * A^(o-1) 
     % sqrt(I + A) = I + sum_i (a_i * A) * (I + b_i * A)^{-1}
     %                            ^^(these terms should be well conditioned)
-        
-    DtN = sparse(Ny, Ny);    
+    
+    DtN_tay = sparse(Ny, Ny);     %initialize for Taylor appr
+    DtN_pade = speye(Ny, Ny);     %initialize for Pade appr
+    
+    %Taylor approximation
     for o = 1:ORDER        
-        DtN = DtN + sqrt_taylor_coeff(o-1) * A^(o-1);
+        DtN_tay = DtN_tay + sqrt_taylor_coeff(o-1) * A^(o-1);
     end    
-    DtN = spdiags(1i * k(y_FE), 0, Ny, Ny) * DtN; % mult by i*k \sum(...)
+    DtN_tay = spdiags(1i * k(y_FE), 0, Ny, Ny) * DtN_tay; % mult by i*k \sum(...)
+    
+    %Pade approximation
+    a = zeros(ORDER,1);
+    b = zeros(ORDER,1);
+    for o = 1:ORDER
+        a(o) = 2 / (2 * ORDER + 1) * sin(o * pi / (2 * ORDER + 1))^2;
+        b(o) = cos(o * pi / (2 * ORDER + 1))^2;
+        DtN_pade  = DtN_pade + (eye(m,n) + b(o).*A) \ (a(o).*A);
+    end
+    DtN_pade = spdiags(1i * k(y_FE), 0, Ny, Ny) * DtN_pade; % mult by i*k \sum(...)
         
     % Crank-Nicolson
-    u(:,j+1) = (I - dx/2 * DtN) \ ((I + dx/2 * DtN) * u(:,j));            
+    u_tay = u;
+    u_pade = u;
+    u_tay(:,j+1) = (I - dx/2 * DtN_tay) \ ((I + dx/2 * DtN_tay) * u_tay(:,j));
+    u_pade(:,j+1) = (I - dx/2 * DtN_pade) \ ((I + dx/2 * DtN_pade) * u_pade(:,j));            
     
     if mod(j, 100) == 0
         fprintf('On step %d out of %d\n', j, Nx-1)
     end
+    
 end
 
 cpu_time = toc;
-fprintf('Calculation CPU time = %0.2f \n', cpu_time);
+    fprintf('Calculation CPU time = %0.2f \n', cpu_time);
+
+%!! max(max(abs(u_tay-u_pade))) returns 0 !!
+
 
 % fprintf('Spectral radius = %.10e \n\n', ... 
 %     abs(eigs((DtN + dx/2*C),(DtN - dx/2*C), 1, 'largestabs', ...
 %     'FailureTreatment', 'keep', 'Tolerance',1e-8, ...
 %     'SubspaceDimension', 40)) );
 
-
-
 %% PLOTS -----------------------------
-figure;
-surf(x,y,real(u)); hold on;
-colormap copper;
-axis image
-shading interp;
-hcolor = colorbar;
-caxis([-1 1]);
-contour(x,y,c(x,y),10,'w','linewidth',1); hold off;
-view(0,90);
-xlim([0 L]);
-ylim([-W W]/2);
-title('Real part of wave field');
+%figure(1)
+%surf(x_sweeping,y_FE,real(u_tay)); hold on;
+%colormap copper;
+%axis image
+%shading interp;
+%hcolor = colorbar;
+%caxis([-1 1]);
+%contour(x_sweeping,y_FE,c,10,'w','linewidth',1); hold off;
+%view(0,90);
+%xlim([0 L]);
+%ylim([-W W]/2);
+%xticks([0:W/5:L]);
+%yticks([-W/2:W/10:W/2]);
+%title('Real part of wave field_taylor');
 
-h = gca;
-h.FontSize = 10;
+
+%h = gca;
+%h.FontSize = 10;
+
+%figure(2)
+%surf(x_sweeping,y_FE,real(u_pade)); hold on;
+%colormap copper;
+%axis image
+%shading interp;
+%hcolor = colorbar;
+%caxis([-1 1]);
+%contour(x_sweeping,y_FE,c,10,'w','linewidth',1); hold off;
+%view(0,90);
+%xlim([0 L]);
+%ylim([-W W]/2);
+%xticks([0:W/5:L]);
+%yticks([-W/2:W/10:W/2]);
+%title('Real part of wave field_pade');
+
+
+%h = gca;
+%h.FontSize = 10;
+
+
+
 
 
 
