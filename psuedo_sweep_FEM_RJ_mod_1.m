@@ -60,6 +60,24 @@ u(:, 1) = exp(1i * k(y_FE) .* y_FE);
 
 tic;
 
+X_Sweeping = zeros(Ny,Nx); %intro x matrix to use contour in plotting mechanism
+
+Y = zeros(Ny,Nx); %intro y matrix to use contour in plotting mechanism
+
+C_Matrix = c(x_sweeping,y_FE);
+
+for i = 1:Nx
+    
+    Y(:,i) = y_FE;
+    
+end
+
+for l=1:Ny
+    
+    X_Sweeping(l,:) = x_sweeping;
+    
+end
+
 for j=1:Nx-1
     
     k = @(x) OMEGA ./ c(x_sweeping(j), x);
@@ -118,43 +136,45 @@ cpu_time = toc;
 %     'SubspaceDimension', 40)) );
 
 %% PLOTS -----------------------------
-%figure(1)
-%surf(x_sweeping,y_FE,real(u_tay)); hold on;
-%colormap copper;
-%axis image
-%shading interp;
-%hcolor = colorbar;
-%caxis([-1 1]);
-%contour(x_sweeping,y_FE,c,10,'w','linewidth',1); hold off;
-%view(0,90);
-%xlim([0 L]);
-%ylim([-W W]/2);
-%xticks([0:W/5:L]);
-%yticks([-W/2:W/10:W/2]);
-%title('Real part of wave field_taylor');
+figure(1)
+surf(X_Sweeping,Y,real(u_tay)); 
+hold on;
+colormap copper;
+axis image
+shading interp;
+hcolor = colorbar;
+caxis([-1 1]);
+contour(X_Sweeping,Y,C_Matrix,10,'w','linewidth',1); %C is maybe the proble, a function now not a matrix
+hold off;
+view(0,90);
+xlim([0 L]);
+ylim([-W W]/2);
+xticks([0:W/5:L]);
+yticks([-W/2:W/10:W/2]);
+title('Real part of wave field Taylor');
 
 
-%h = gca;
-%h.FontSize = 10;
+h = gca;
+h.FontSize = 10;
 
-%figure(2)
-%surf(x_sweeping,y_FE,real(u_pade)); hold on;
-%colormap copper;
-%axis image
-%shading interp;
-%hcolor = colorbar;
-%caxis([-1 1]);
-%contour(x_sweeping,y_FE,c,10,'w','linewidth',1); hold off;
-%view(0,90);
-%xlim([0 L]);
-%ylim([-W W]/2);
-%xticks([0:W/5:L]);
-%yticks([-W/2:W/10:W/2]);
-%title('Real part of wave field_pade');
+figure(2)
+surf(X_Sweeping,Y,real(u_pade)); hold on;
+colormap copper;
+axis image
+shading interp;
+hcolor = colorbar;
+caxis([-1 1]);
+contour(X_Sweeping,Y,C_Matrix,10,'w','linewidth',1); hold off;
+view(0,90);
+xlim([0 L]);
+ylim([-W W]/2);
+xticks([0:W/5:L]);
+yticks([-W/2:W/10:W/2]);
+title('Real part of wave field Pade');
 
 
-%h = gca;
-%h.FontSize = 10;
+h = gca;
+h.FontSize = 10;
 
 
 
