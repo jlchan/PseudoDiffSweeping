@@ -1,15 +1,15 @@
 %written by Sebastian Acosta    
     %modified by Jesse Chan 9 June 2022
-    %modified by Raven Shane Johnson 15 June 2022
+    %modified by Raven Shane Johnson 21 June 2022
 
 W = 1;              % Width of domain
 L = 1;              % Length of domain
-OMEGA = 200*pi;     % Angular frequency
+OMEGA = 50*pi;     % Angular frequency
 
 %Determine accuracy 
 PPWx = 30;          % Points per wavelength in x-direction (marching)
 PPWy = 4;          % Points per wavelength in y-direction (tangential)
-ORDER = 4;          % Pseudo-diff order
+ORDER = 2;          % Pseudo-diff order
 
 c0 = 1;                                             % reference wavespeed
 lambda = 2 * pi * c0 / OMEGA;                       % reference wavelength                 
@@ -54,6 +54,9 @@ u = zeros(Ny, Nx);
 
 u(:, 1) = exp(1i * k(y_FE) .* y_FE);
 
+u_tay = u;
+u_pade = u;
+
 %%
 
 %SWEEPING IN THE X-DIRECTION
@@ -96,6 +99,8 @@ for j=1:Nx-1
     DtN_tay = sparse(Ny, Ny);     %initialize for Taylor appr
     DtN_pade = speye(Ny, Ny);     %initialize for Pade appr
     
+    %Are these orders matched up??
+    
     %Taylor approximation
     for o = 1:ORDER        
         DtN_tay = DtN_tay + sqrt_taylor_coeff(o-1) * A^(o-1);
@@ -103,18 +108,16 @@ for j=1:Nx-1
     DtN_tay = spdiags(1i * k(y_FE), 0, Ny, Ny) * DtN_tay; % mult by i*k \sum(...)
     
     %Pade approximation
-    a = zeros(ORDER,1);
-    b = zeros(ORDER,1);
-    for o = 1:ORDER
-        a(o) = 2 / (2 * ORDER + 1) * sin(o * pi / (2 * ORDER + 1))^2;
-        b(o) = cos(o * pi / (2 * ORDER + 1))^2;
+    a = zeros((ORDER-1),1);
+    b = zeros((ORDER-1),1);
+    for o = 1:(ORDER-1)
+        a(o) = 2 / (2 * (ORDER-1) + 1) * sin(o * pi / (2 * (ORDER-1) + 1))^2;
+        b(o) = cos(o * pi / (2 * (ORDER-1) + 1))^2;
         DtN_pade  = DtN_pade + (eye(m,n) + b(o).*A) \ (a(o).*A);
     end
     DtN_pade = spdiags(1i * k(y_FE), 0, Ny, Ny) * DtN_pade; % mult by i*k \sum(...)
         
     % Crank-Nicolson
-    u_tay = u;
-    u_pade = u;
     u_tay(:,j+1) = (I - dx/2 * DtN_tay) \ ((I + dx/2 * DtN_tay) * u_tay(:,j));
     u_pade(:,j+1) = (I - dx/2 * DtN_pade) \ ((I + dx/2 * DtN_pade) * u_pade(:,j));            
     
@@ -127,7 +130,10 @@ end
 cpu_time = toc;
     fprintf('Calculation CPU time = %0.2f \n', cpu_time);
 
-%!! max(max(abs(u_tay-u_pade))) returns 0 !!
+%!! OMEGA = 10pi, ORDER = 4: max(max(abs(u_tay-u_pade))) returns 0.1414 !!
+%!! OMEGA = 50pi, ORDER = 4: max(max(abs(u_tay-u_pade))) returns 0.0680 !!
+%!! OMEGA = 50pi, ORDER = 1: max(max(abs(u_tay-u_pade))) returns 2.6505 !!
+%!! OMEGA = 50pi, ORDER = 2: max(max(abs(u_tay-u_pade))) returns 0.6037 !!
 
 
 % fprintf('Spectral radius = %.10e \n\n', ... 
@@ -175,8 +181,6 @@ title('Real part of wave field Pade');
 
 h = gca;
 h.FontSize = 10;
-
-
 
 
 
