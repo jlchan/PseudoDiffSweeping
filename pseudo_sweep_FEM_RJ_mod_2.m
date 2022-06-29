@@ -7,9 +7,9 @@ L = 1;              % Length of domain
 OMEGA = 50*pi;      % Angular frequency
 
 %Determine accuracy 
-PPWx = 30;          % Points per wavelength in x-direction (marching)
+PPWx = 100;          % Points per wavelength in x-direction (marching)
 PPWy = 4;           % Points per wavelength in y-direction (tangential)
-ORDER = 2;          % Pseudo-diff order
+ORDER = 2;          % Order of the Pade approximation
 
 c0 = 1;                                             % reference wavespeed
 lambda = 2 * pi * c0 / OMEGA;                       % reference wavelength                 
@@ -20,12 +20,12 @@ Nx = round(PPWx * L / lambda);                      % N points in x-direction
 dy = W / (Ny - 1);                                  % mesh size in y-direction
 dx = L / (Nx - 1);                                  % mesh size in x-direction
 
-alpha = 0.25;
+alpha = 0.75;
 c = @(x, y) c0 * (1 - alpha * exp(-100 * ((x-0.5).^2 + y.^2)));
 
 dcdx = @(x,y) c0 * (alpha .* 200 .* (x - 0.5) .* exp(-100 * ((x-0.5).^2 + y.^2)));
 
-d_omega_invc_dx = @(x,y) -2 * OMEGA^2 ./ c(x,y).^3 .* dcdx(x,y);
+d_omega_invc2_dx = @(x,y) -2 * (OMEGA^2 ./ c(x,y).^3) .* dcdx(x,y);
 
 fprintf('--------------------------------------------------- \n');
 fprintf('Pseudo-diff Order = %i \n', ORDER);
@@ -36,7 +36,7 @@ fprintf('Nx x Ny = %i x %i \n', Nx, Ny);
 
 %%
 
-N = 5;
+N = 4;
 VX = linspace(-.5, .5, ceil(Ny / N)+1);
 k = @(x) 1; % dummy argument
 f_zero = @(x) 0;
@@ -90,7 +90,7 @@ for j=1:Nx-1
     delta_x = x_sweeping(j+1) - x_sweeping(j);
     k = @(y) OMEGA ./ c(x_avg, y);
     k_sq = @(y) k(y).^2;
-    inv_k_sq = @(x) 1 ./ k(x).^2;
+    inv_k_sq = @(x) 1 ./ k_sq(x);
     [~, A_variable_k, ~, ~, ~] = compute_FE_system(N, VX, inv_k_sq, f_zero);
     
     A = invM * A_variable_k; 
@@ -102,28 +102,25 @@ for j=1:Nx-1
     % sqrt(I + A) = I + sum_i (a_i * A) * (I + b_i * A)^{-1}
     %                            ^^(these terms should be well conditioned)
     
-    DtN_pade = speye(Ny, Ny);     %initialize for Pade appr
-    
-    %Pade approximation
+    % Pade approximation
+    lambda_1 = speye(Ny, Ny);     %initialize for Pade appr    
     for o = 1:ORDER
         a = 2 / (2 * ORDER + 1) * sin(o * pi / (2 * ORDER + 1))^2;
         b = cos(o * pi / (2 * ORDER + 1))^2;
-        DtN_pade  = DtN_pade + (eye(m,n) + b.*A) \ (a.*A);
+        lambda_1  = lambda_1 + (eye(m,n) + b.*A) \ (a.*A);
     end
-    DtN_pade = spdiags(1i * k(y_FE), 0, Ny, Ny) * DtN_pade; % mult by i*k \sum(...)
+    lambda_1 = spdiags(1i * k(y_FE), 0, Ny, Ny) * lambda_1; % mult by i*k \sum(...)
 
-    u_intermed = (I - dx/2 * DtN_pade) \ ((I + dx/2 * DtN_pade) * u(:,j));
-
-    %adding in expansion of lambda operator ^2 fraction
-    u_avg = 0.5 * (u(:, j) + u_intermed);
+    % dp/dt = (lambda_1 + lambda_0) * u + O(1/OMEGA) \approx DtN * u
+    %   => dp/dt = A * u
+    %   ======>  abs(eig(I + dt * A)) < 1 = CFL condition.
+    % lambda_1 * u = DtN \ 
+    lambda_0 = (spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ (-0.25 * spdiags(d_omega_invc2_dx(x_avg, y_FE), 0, Ny, Ny));
+    DtN = lambda_1 + lambda_0;    
     
-    %A_constant_k * (u_intermed - u(:, j))
-    
-    f_intermed = -0.25 * (d_omega_invc_dx(x_avg, y_FE) .* u_avg + A_constant_k * (u_intermed - u(:,j)) ./ delta_x );    
-    u(:, j+1) = u_intermed + 0*((spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ f_intermed);
-    
-    % Crank-Nicolson
-    
+    u1 = u(:,j) + dx * DtN * u(:,j);  
+    u(:,j+1) = u(:,j) + dx * (DtN * (0.5 * (u(:,j) + u1)));
+   
     if mod(j, 100) == 0
         fprintf('On step %d out of %d\n', j, Nx-1)
     end
@@ -146,7 +143,7 @@ cpu_time = toc;
 
 %% PLOTS -----------------------------
 
-figure(2)
+figure
 surf(X_Sweeping,Y,real(u)); hold on;
 colormap copper;
 axis image
