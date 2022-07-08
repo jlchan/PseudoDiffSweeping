@@ -4,6 +4,7 @@
 
 W = 1;              % Width of domain
 L = 1;              % Length of domain
+L = .55;
 OMEGA = 50*pi;      % Angular frequency
 
 %Determine accuracy 
