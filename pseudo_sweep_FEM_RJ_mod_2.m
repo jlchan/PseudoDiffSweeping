@@ -21,6 +21,7 @@ dy = W / (Ny - 1);                                  % mesh size in y-direction
 dx = L / (Nx - 1);                                  % mesh size in x-direction
 
 alpha = 0.75;
+
 c = @(x, y) c0 * (1 - alpha * exp(-100 * ((x-0.5).^2 + y.^2)));
 
 dcdx = @(x,y) c0 * (alpha .* 200 .* (x - 0.5) .* exp(-100 * ((x-0.5).^2 + y.^2)));
@@ -36,7 +37,7 @@ fprintf('Nx x Ny = %i x %i \n', Nx, Ny);
 
 %%
 
-N = 4;
+N = 4;     %order of FE polyn?
 VX = linspace(-.5, .5, ceil(Ny / N)+1);
 k = @(x) 1; % dummy argument
 f_zero = @(x) 0;
@@ -90,7 +91,7 @@ for j=1:Nx-1
     delta_x = x_sweeping(j+1) - x_sweeping(j);
     k = @(y) OMEGA ./ c(x_avg, y);
     k_sq = @(y) k(y).^2;
-    inv_k_sq = @(x) 1 ./ k_sq(x);
+    inv_k_sq = @(x) 1 ./ k_sq(x);   %why have we switched to x's?
     [~, A_variable_k, ~, ~, ~] = compute_FE_system(N, VX, inv_k_sq, f_zero);
     
     A = invM * A_variable_k; 
@@ -102,7 +103,11 @@ for j=1:Nx-1
     % sqrt(I + A) = I + sum_i (a_i * A) * (I + b_i * A)^{-1}
     %                            ^^(these terms should be well conditioned)
     
-    % Pade approximation
+    % Pade approximation of sqrt(1+x)
+   
+    %is this still the function we want to apr if lambda_1 = i * sqrt(omega^s *
+        %symb(1/c^2) + sigma)
+    
     lambda_1 = speye(Ny, Ny);     %initialize for Pade appr    
     for o = 1:ORDER
         a = 2 / (2 * ORDER + 1) * sin(o * pi / (2 * ORDER + 1))^2;
@@ -111,16 +116,35 @@ for j=1:Nx-1
     end
     lambda_1 = spdiags(1i * k(y_FE), 0, Ny, Ny) * lambda_1; % mult by i*k \sum(...)
 
+    %Where do these come from??
+
     % dp/dt = (lambda_1 + lambda_0) * u + O(1/OMEGA) \approx DtN * u
     %   => dp/dt = A * u
     %   ======>  abs(eig(I + dt * A)) < 1 = CFL condition.
     % lambda_1 * u = DtN \ 
+    
     lambda_0 = (spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ (-0.25 * spdiags(d_omega_invc2_dx(x_avg, y_FE), 0, Ny, Ny));
+    %Why does A_constant_k come in here??
+
     DtN = lambda_1 + lambda_0;    
     
-    u1 = u(:,j) + dx * DtN * u(:,j);  
-    u(:,j+1) = u(:,j) + dx * (DtN * (0.5 * (u(:,j) + u1)));
+    %Jesse's Heun's method
+    %u1 = u(:,j) + dx * DtN * u(:,j);  
+    %u(:,j+1) = u(:,j) + dx * (DtN * (0.5 * (u(:,j) + u1)));
+
+    %Retry Heun's
+    %u1 = dx * DtN * u(:,j);
+    %u2 = dx * DtN * (u(:,j) + 0.5 * u1);
+    %u(:,j+1) = u(:,j) + u2;
+
+    %4th order Runge Kutta attempt
+    u1 = DtN * u(:,j);  
+    u2 = DtN * (u(:,j) + 0.5 * dx * u1);
+    u3 = DtN * (u(:,j) + 0.5 * dx * u2);
+    u4 = DtN * (u(:,j) + dx * u3);
+    u(:,j+1) = u(:,j) + (dx/6) * (u1 + 2*u2 + 2*u3 + u4);
    
+
     if mod(j, 100) == 0
         fprintf('On step %d out of %d\n', j, Nx-1)
     end
@@ -129,11 +153,6 @@ end
 
 cpu_time = toc;
     fprintf('Calculation CPU time = %0.2f \n', cpu_time);
-
-%!! OMEGA = 10pi, ORDER = 4: max(max(abs(u_tay-u_pade))) returns 0.1414 !!
-%!! OMEGA = 50pi, ORDER = 4: max(max(abs(u_tay-u_pade))) returns 0.0680 !!
-%!! OMEGA = 50pi, ORDER = 1: max(max(abs(u_tay-u_pade))) returns 2.6505 !!
-%!! OMEGA = 50pi, ORDER = 2: max(max(abs(u_tay-u_pade))) returns 0.6037 !!
 
 
 % fprintf('Spectral radius = %.10e \n\n', ... 
@@ -154,8 +173,8 @@ contour(X_Sweeping,Y,C_Matrix,10,'w','linewidth',1); hold off;
 view(0,90);
 xlim([0 L]);
 ylim([-W W]/2);
-xticks([0:W/5:L]);
-yticks([-W/2:W/10:W/2]);
+xticks(0:W/5:L);
+yticks(-W/2:W/10:W/2);
 title('Real part of wave field Pade');
 
 
