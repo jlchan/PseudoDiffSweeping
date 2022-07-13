@@ -108,6 +108,9 @@ for j=1:Nx-1
     %   => dp/dt = A * u
     %   ======>  abs(eig(I + dt * A)) < 1 = CFL condition (Forward Euler)
     
+
+    %______________________________________________________________________
+
     %DO WE WANT TO CALCULATE LAMBDA 0 SO MANY TIMES??
 
 
@@ -115,13 +118,83 @@ for j=1:Nx-1
 
     % ** u1 **
 
-    A_u = A * u(:,j);  %set A * u_j for u1
+    %A_u = A * u(:,j);  %set A * u_j for u1
 
     %Lambda_0 * u_j
-    lambda_0_uj = ((spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ (-0.25 * spdiags(d_omega_invc2_dx(x_avg, y_FE), 0, Ny, Ny))) * u(:,j);
+    %lambda_0_uj = ((spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ (-0.25 * spdiags(d_omega_invc2_dx(x_avg, y_FE), 0, Ny, Ny))) * u(:,j);
        
     %Lambda_1 terms (Pade appr)
-    lambda_1_uj = u(:,j);     %initialize for Pade appr - lambda_1*uj = I*uj = uj
+    %lambda_1_uj = u(:,j);     %initialize for Pade appr - lambda_1*uj = I*uj = uj
+
+    %initialize vectors to store pade coefficients
+    %a = zeros(ORDER,1);     
+    %b = zeros(ORDER,1);
+
+    %for o = 1:ORDER
+        %a(o) = 2 / (2 * ORDER + 1) * sin(o * pi / (2 * ORDER + 1))^2;
+        %b(o) = cos(o * pi / (2 * ORDER + 1))^2;
+        
+        %lambda_1_uj term of u1
+        %lambda_1_uj  = lambda_1_uj + (eye(m,n) + b(o) .* A) \ (a(o) .* A_u);
+    %end
+   
+    %lambda_1_uj = 1i * k(y_FE) .* lambda_1_uj; % mult by i*k \sum(...)
+
+    %u1 = lambda_1_uj + lambda_0_uj;
+
+
+    % ** u2 **
+
+    %A_u1 = A * u1;
+
+    %lambda_0_u1 = ((spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ (-0.25 * spdiags(d_omega_invc2_dx(x_avg, y_FE), 0, Ny, Ny))) * u1;
+       
+    %lambda_1_u1 = u1;
+
+    %for o = 1:ORDER
+        %lambda_1_u1  = lambda_1_u1 + (eye(m,n) + b(o) .* A) \ (a(o) .* A_u1);
+    %end
+    
+    %lambda_1_u1 = 1i * k(y_FE) .* lambda_1_u1; % mult by i*k \sum(...)
+
+    %u2 = u1 + 0.5 * dx * (lambda_1_u1 + lambda_0_u1);
+
+
+    % ** u3 **
+
+    %A_u2 = A * u2;
+
+    %lambda_0_u2 = ((spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ (-0.25 * spdiags(d_omega_invc2_dx(x_avg, y_FE), 0, Ny, Ny))) * u2;
+       
+    %lambda_1_u2 = u2;
+
+    %for o = 1:ORDER
+        %lambda_1_u2  = lambda_1_u2 + (eye(m,n) + b(o) .* A) \ (a(o) .* A_u2);
+    %end
+    
+    %lambda_1_u2 = 1i * k(y_FE) .* lambda_1_u2; % mult by i*k \sum(...)
+
+    %u3 = u1 + 0.5 * dx * (lambda_1_u2 + lambda_0_u2);
+    
+    % ** u4 **
+
+    %A_u3 = A * u3;
+
+    %lambda_0_u3 = ((spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ (-0.25 * spdiags(d_omega_invc2_dx(x_avg, y_FE), 0, Ny, Ny))) * u3;
+       
+    %lambda_1_u3 = u3;
+
+    %for o = 1:ORDER
+        %lambda_1_u3  = lambda_1_u3 + (eye(m,n) + b(o) .* A) \ (a(o) .* A_u3);
+    %end
+    
+    %lambda_1_u3 = 1i * k(y_FE) .* lambda_1_u3; % mult by i*k \sum(...)
+    
+    
+    %______________________________________________________________________
+   
+    
+    % Pade approximation of sqrt(1+x) & 4th order Runge Kutta - no matrices
 
     %initialize vectors to store pade coefficients
     a = zeros(ORDER,1);     
@@ -130,65 +203,15 @@ for j=1:Nx-1
     for o = 1:ORDER
         a(o) = 2 / (2 * ORDER + 1) * sin(o * pi / (2 * ORDER + 1))^2;
         b(o) = cos(o * pi / (2 * ORDER + 1))^2;
-        
-        %lambda_1_uj term of u1
-        lambda_1_uj  = lambda_1_uj + (eye(m,n) + b(o) .* A) \ (a(o) .* A_u);
     end
-   
-    lambda_1_uj = 1i * k(y_FE) .* lambda_1_uj; % mult by i*k \sum(...)
 
-    u1 = lambda_1_uj + lambda_0_uj;
-
-
-    % ** u2 **
-
-    A_u1 = A * u1;
-
-    lambda_0_u1 = ((spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ (-0.25 * spdiags(d_omega_invc2_dx(x_avg, y_FE), 0, Ny, Ny))) * u1;
-       
-    lambda_1_u1 = u1;
-
-    for o = 1:ORDER
-        lambda_1_u1  = lambda_1_u1 + (eye(m,n) + b(o) .* A) \ (a(o) .* A_u1);
-    end
+    u1 = DtN(A,k_sq,A_constant_k,d_omega_invc2_dx,Ny,x_avg,y_FE,ORDER,m,n,a,b,k,u(:,j));
     
-    lambda_1_u1 = 1i * k(y_FE) .* lambda_1_u1; % mult by i*k \sum(...)
+    u2 = u1 + 0.5 * dx * DtN(A,k_sq,A_constant_k,d_omega_invc2_dx,Ny,x_avg,y_FE,ORDER,m,n,a,b,k,u1);
 
-    u2 = u1 + 0.5 * dx * (lambda_1_u1 + lambda_0_u1);
+    u3 = u1 + 0.5 * dx * DtN(A,k_sq,A_constant_k,d_omega_invc2_dx,Ny,x_avg,y_FE,ORDER,m,n,a,b,k,u2);
 
-
-    % ** u3 **
-
-    A_u2 = A * u2;
-
-    lambda_0_u2 = ((spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ (-0.25 * spdiags(d_omega_invc2_dx(x_avg, y_FE), 0, Ny, Ny))) * u2;
-       
-    lambda_1_u2 = u2;
-
-    for o = 1:ORDER
-        lambda_1_u2  = lambda_1_u2 + (eye(m,n) + b(o) .* A) \ (a(o) .* A_u2);
-    end
-    
-    lambda_1_u2 = 1i * k(y_FE) .* lambda_1_u2; % mult by i*k \sum(...)
-
-    u3 = u1 + 0.5 * dx * (lambda_1_u2 + lambda_0_u2);
-
-
-    % ** u4 **
-
-    A_u3 = A * u3;
-
-    lambda_0_u3 = ((spdiags(k_sq(y_FE), 0, Ny, Ny) + A_constant_k) \ (-0.25 * spdiags(d_omega_invc2_dx(x_avg, y_FE), 0, Ny, Ny))) * u3;
-       
-    lambda_1_u3 = u3;
-
-    for o = 1:ORDER
-        lambda_1_u3  = lambda_1_u3 + (eye(m,n) + b(o) .* A) \ (a(o) .* A_u3);
-    end
-    
-    lambda_1_u3 = 1i * k(y_FE) .* lambda_1_u3; % mult by i*k \sum(...)
-
-    u4 = u1 + dx * (lambda_1_u3 + lambda_0_u3);
+    u4 = u1 + dx * DtN(A,k_sq,A_constant_k,d_omega_invc2_dx,Ny,x_avg,y_FE,ORDER,m,n,a,b,k,u3);
 
 
     %Calculate next column of u
@@ -235,4 +258,21 @@ h = gca;
 h.FontSize = 10;
 
 
+%function for calculating DtN * u_j
+function [u_next] = DtN(A_main,func1,A_k,func2,size_y,x_main,y_main,order,size_1,size_2,a_vec,b_vec,func3,u_current)
 
+    A_u = A_main * u_current;
+
+    lambda_0_u = ((spdiags(func1(y_main), 0, size_y, size_y) + A_k) \ (-0.25 * spdiags(func2(x_main, y_main), 0, size_y, size_y))) * u_current;
+       
+    lambda_1_u = u_current;
+
+    for j = 1:order
+        lambda_1_u  = lambda_1_u + (eye(size_1,size_2) + b_vec(j) .* A_main) \ (a_vec(j) .* A_u);
+    end
+    
+    lambda_1_u = 1i * func3(y_main) .* lambda_1_u; % mult by i*k \sum(...)
+
+    u_next = lambda_1_u + lambda_0_u;
+
+end
