@@ -1,18 +1,21 @@
-%written by Sebastian Acosta    
-    %modified by Jesse Chan 22 June 2022
-    %modified by Raven Shane Johnson 12 July 2022
+%written by Sebastian Acosta
+%modified by Jesse Chan 22 June 2022
+%modified by Raven Shane Johnson 12 July 2022
+
+global c0 alpha OMEGA
 
 W = 1;              % Width of domain
 L = 1;              % Length of domain
 OMEGA = 50*pi;      % Angular frequency
 
-%Determine accuracy 
-PPWx = 100;          % Points per wavelength in x-direction (marching)
+%Determine accuracy
+PPWx = 50;          % Points per wavelength in x-direction (marching)
 PPWy = 4;           % Points per wavelength in y-direction (tangential)
 ORDER = 2;          % Order of the Pade approximation
 
 c0 = 1;                                             % reference wavespeed
-lambda = 2 * pi * c0 / OMEGA;                       % reference wavelength                 
+alpha = 0.75;
+lambda = 2 * pi * c0 / OMEGA;                       % reference wavelength
 
 Ny = round(PPWy * W / lambda);                      % N points in y-direction
 Nx = round(PPWx * L / lambda);                      % N points in x-direction
@@ -20,13 +23,9 @@ Nx = round(PPWx * L / lambda);                      % N points in x-direction
 dy = W / (Ny - 1);                                  % mesh size in y-direction
 dx = L / (Nx - 1);                                  % mesh size in x-direction
 
-alpha = 0.75;
-
-c = @(x, y) c0 * (1 - alpha * exp(-100 * ((x-0.5).^2 + y.^2)));
-
-dcdx = @(x,y) c0 * (alpha .* 200 .* (x - 0.5) .* exp(-100 * ((x-0.5).^2 + y.^2)));
-
-d_omega_invc2_dx = @(x,y) -2 * (OMEGA^2 ./ c(x,y).^3) .* dcdx(x,y);
+% c = @(x, y) c0 * (1 - alpha * exp(-100 * ((x-0.5).^2 + y.^2)));
+%dcdx = @(x,y) c0 * (alpha .* 200 .* (x - 0.5) .* exp(-100 * ((x-0.5).^2 + y.^2)));
+% d_omega_invc2_dx = @(x,y) -2 * (OMEGA^2 ./ c(x,y).^3) .* dcdx(x,y);
 
 fprintf('--------------------------------------------------- \n');
 fprintf('Pseudo-diff Order = %i \n', ORDER);
@@ -37,11 +36,11 @@ fprintf('Nx x Ny = %i x %i \n', Nx, Ny);
 
 %%
 
+global N VX
 N = 4;     %order of FE polyn?
 VX = linspace(-.5, .5, ceil(Ny / N)+1);
 k = @(x) 1; % dummy argument
-f_zero = @(x) 0;
-[M, A, ~, y_FE, global_to_local_ids] = compute_FE_system(N, VX, k, f_zero);
+[M, A, ~, y_FE, global_to_local_ids] = compute_FE_system(N, VX, k, @(x) 0);
 
 %Defining arrays and allocating memory
 Ny = length(y_FE);
@@ -85,54 +84,41 @@ for l=1:Ny
     
 end
 
-% Pade approximation of sqrt(1+x) & 4th order Runge Kutta - no matrices
-%initialize vectors to store pade coefficients
-a = zeros(ORDER,1);
-b = zeros(ORDER,1);
-
-for o = 1:ORDER
-    a(o) = 2 / (2 * ORDER + 1) * sin(o * pi / (2 * ORDER + 1))^2;
-    b(o) = cos(o * pi / (2 * ORDER + 1))^2;
-end
+[a, b] = pade_coefficients(ORDER);
 
 %MATRIX FREE EXPLICIT METHOD
 for j=1:Nx-1
     
-    x_avg = 0.5 * (x_sweeping(j) + x_sweeping(j+1));
-    delta_x = x_sweeping(j+1) - x_sweeping(j);
-    k = @(y) OMEGA ./ c(x_avg, y);
-    k_sq = @(y) k(y).^2;
-    inv_k_sq = @(y) 1 ./ k_sq(y);
-    [~, A_variable_k, ~, ~, ~] = compute_FE_system(N, VX, inv_k_sq, f_zero);
-    
-    A = invM * A_variable_k; 
-    
-    [m,n] = size(A);          
-
-    k1 = DtN(A, k_sq, A_constant_k, d_omega_invc2_dx, Ny, x_avg, y_FE, ORDER, m, n, a, b, k, u(:,j));    
+    x1 = x_sweeping(:,j);
+    k1 = DtN(A_constant_k, x1, y_FE, a, b, u(:,j));
     u1 = u(:,j) + 0.5 * dx * k1;
-    k2 = DtN(A, k_sq, A_constant_k, d_omega_invc2_dx, Ny, x_avg, y_FE, ORDER, m, n, a, b, k, u1);
+    
+    x2 = x1 + 0.5 * dx;
+    k2 = DtN(A_constant_k, x2, y_FE, a, b, u1);
     u2 = u(:,j) + 0.5 * dx * k2;
-    k3 = DtN(A, k_sq, A_constant_k, d_omega_invc2_dx, Ny, x_avg, y_FE, ORDER, m, n, a, b, k, u2);
-    u3 = u(:,j) + dx * k3; 
-    k4 = DtN(A, k_sq, A_constant_k, d_omega_invc2_dx, Ny, x_avg, y_FE, ORDER, m, n, a, b, k, u3);
-
+    
+    k3 = DtN(A_constant_k, x2, y_FE, a, b, u2);
+    u3 = u(:,j) + dx * k3;
+    
+    x4 = x1 + dx;
+    k4 = DtN(A_constant_k, x4, y_FE, a, b, u3);
+    
     %Calculate next column of u
     u(:,j+1) = u(:,j) + (dx / 6) * (k1 + 2*k2 + 2*k3 + k4);
-
+    
     %print current computation step
     if mod(j, 100) == 0
         fprintf('On step %d out of %d\n', j, Nx-1)
     end
     
 end
- 
+
 %print total computation time
 cpu_time = toc;
-    fprintf('Calculation CPU time = %0.2f \n', cpu_time);
+fprintf('Calculation CPU time = %0.2f \n', cpu_time);
 
 
-% fprintf('Spectral radius = %.10e \n\n', ... 
+% fprintf('Spectral radius = %.10e \n\n', ...
 %     abs(eigs((DtN + dx/2*C),(DtN - dx/2*C), 1, 'largestabs', ...
 %     'FailureTreatment', 'keep', 'Tolerance',1e-8, ...
 %     'SubspaceDimension', 40)) );
@@ -158,22 +144,55 @@ title('Real part of wave field Pade');
 h = gca;
 h.FontSize = 10;
 
+%% compute DtN directly
+
+e = zeros(size(u(:,1)));
+DtN_matrix = zeros(length(e));
+for i = 1:length(e)
+    e(i) = 1;
+    DtN_matrix(:,i) = DtN(A_constant_k, x_sweeping(1), y_FE, a, b, e);
+    e(i) = 0;
+end
+DtN_matrix(abs(DtN_matrix) < 1e-10) = 0;
+
+
+%%
+
+function val = c(x,y)
+global c0 alpha
+val = c0 * (1 - alpha * exp(-100 * ((x-0.5).^2 + y.^2)));
+end
+
+function val = dcdx(x,y)
+global c0 alpha
+val = c0 * (alpha .* 200 .* (x - 0.5) .* exp(-100 * ((x-0.5).^2 + y.^2)));
+end
+
+function val = d_omega_inv_c2(x,y)
+global OMEGA
+val = -2 * (OMEGA^2 ./ c(x,y).^3) .* dcdx(x,y);
+end
 
 %function for calculating DtN * u_j
-function [u_next] = DtN(A_main, func1, A_k, func2, size_y, x_main, y_main, order, size_1, size_2, a_vec, b_vec, func3, u_current)
+function [u_next] = DtN(A_k, x, y_FE, a_pade, b_pade, u_current)
 
-    A_u = A_main * u_current;
+global OMEGA
+global N VX
 
-    lambda_0_u = ((spdiags(func1(y_main), 0, size_y, size_y) + A_k) \ (-0.25 * spdiags(func2(x_main, y_main), 0, size_y, size_y))) * u_current;
-       
-    lambda_1_u = u_current;
+k = @(y) OMEGA ./ c(x, y);
+k_sq = @(y) k(y).^2;
+inv_k_sq = @(y) 1 ./ k_sq(y);
+[M, A_variable_k, ~, ~, ~] = compute_FE_system(N, VX, inv_k_sq, (@(x) 0));
 
-    for j = 1:order
-        lambda_1_u  = lambda_1_u + (eye(size_1,size_2) + b_vec(j) .* A_main) \ (a_vec(j) .* A_u);
-    end
-    
-    lambda_1_u = 1i * func3(y_main) .* lambda_1_u; % mult by i*k \sum(...)
+A_u = (A_variable_k * u_current) ./ diag(M);
 
-    u_next = lambda_1_u + lambda_0_u;
+lambda_1_u = u_current;
+for j = 1:length(a_pade)
+    lambda_1_u = lambda_1_u + (speye(size(A_variable_k, 1)) + b_pade(j) .* A_variable_k) \ (a_pade(j) .* A_u);
+end
+lambda_1_u = 1i * k(y_FE) .* lambda_1_u; % mult by i*k \sum(...)
+
+lambda_0_u = (spdiags(k_sq(y_FE), 0, size(A_k, 1), size(A_k, 2)) + A_k) \ (-0.25 * d_omega_inv_c2(x, y_FE) .* u_current);
+u_next = lambda_1_u + lambda_0_u;
 
 end
