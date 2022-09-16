@@ -1,6 +1,6 @@
 %written by Sebastian Acosta
-%modified by Jesse Chan 22 June 2022
-%modified by Raven Shane Johnson 12 July 2022
+%modified by Jesse Chan 24 Aug 2022
+%modified by Raven Shane Johnson 16 Aug 2022
 
 global c0 alpha OMEGA
 
@@ -14,7 +14,7 @@ PPWy = 4;           % Points per wavelength in y-direction (tangential)
 ORDER = 2;          % Order of the Pade approximation
 
 c0 = 1;                                             % reference wavespeed
-alpha = 0.75;
+alpha = 0.25;
 lambda = 2 * pi * c0 / OMEGA;                       % reference wavelength
 
 Ny = round(PPWy * W / lambda);                      % N points in y-direction
@@ -41,7 +41,6 @@ N = 4;     %order of FE polyn?
 VX = linspace(-.5, .5, ceil(Ny / N)+1);
 k = @(x) 1; % dummy argument
 [M, A, ~, y_FE, global_to_local_ids] = compute_FE_system(N, VX, k, @(x) 0);
-
 %Defining arrays and allocating memory
 Ny = length(y_FE);
 I = speye(Ny, Ny);  % Identity matrix
@@ -86,22 +85,24 @@ end
 
 [a, b] = pade_coefficients(ORDER);
 
+f = @(x) (1 ./ c(x ,y_FE).^2 - 1) .* OMEGA^2 .* exp(1i * OMEGA * x);
+    
 %MATRIX FREE EXPLICIT METHOD
 for j=1:Nx-1
     
     x1 = x_sweeping(:,j);
-    k1 = DtN(A_constant_k, x1, y_FE, a, b, u(:,j));
+    k1 = DtN(A_constant_k, x1, y_FE, a, b, u(:,j), f(x1));
     u1 = u(:,j) + 0.5 * dx * k1;
     
     x2 = x1 + 0.5 * dx;
-    k2 = DtN(A_constant_k, x2, y_FE, a, b, u1);
+    k2 = DtN(A_constant_k, x2, y_FE, a, b, u1, f(x2));
     u2 = u(:,j) + 0.5 * dx * k2;
     
-    k3 = DtN(A_constant_k, x2, y_FE, a, b, u2);
+    k3 = DtN(A_constant_k, x2, y_FE, a, b, u2, f(x2));
     u3 = u(:,j) + dx * k3;
     
     x4 = x1 + dx;
-    k4 = DtN(A_constant_k, x4, y_FE, a, b, u3);
+    k4 = DtN(A_constant_k, x4, y_FE, a, b, u3, f(x4));
     
     %Calculate next column of u
     u(:,j+1) = u(:,j) + (dx / 6) * (k1 + 2*k2 + 2*k3 + k4);
@@ -112,6 +113,35 @@ for j=1:Nx-1
     end
     
 end
+
+% backwards in time
+% dx = -dx;
+% for j=Nx:-1:2
+%     
+%     x1 = x_sweeping(:,j);
+%     f = u(:,j); 
+%     k1 = DtN(A_constant_k, x1, y_FE, a, b, u(:,j), f);
+%     u1 = u(:,j) + 0.5 * dx * k1;
+%     
+%     x2 = x1 + 0.5 * dx;
+%     k2 = DtN(A_constant_k, x2, y_FE, a, b, u1, f);
+%     u2 = u(:,j) + 0.5 * dx * k2;
+%     
+%     k3 = DtN(A_constant_k, x2, y_FE, a, b, u2, f);
+%     u3 = u(:,j) + dx * k3;
+%     
+%     x4 = x1 + dx;
+%     k4 = DtN(A_constant_k, x4, y_FE, a, b, u3, f);
+%     
+%     %Calculate next column of u
+%     u(:,j-1) = u(:,j) + (dx / 6) * (k1 + 2*k2 + 2*k3 + k4);
+%     
+%     %print current computation step
+%     if mod(j, 100) == 0
+%         fprintf('On step %d out of %d\n', j, Nx-1)
+%     end
+%     
+%end
 
 %print total computation time
 cpu_time = toc;
@@ -127,33 +157,37 @@ fprintf('Calculation CPU time = %0.2f \n', cpu_time);
 
 figure
 surf(X_Sweeping,Y,real(u)); hold on;
+% surf(X_Sweeping,Y,imag(u)); hold on;
 colormap copper;
 axis image
 shading interp;
 hcolor = colorbar;
 caxis([-1 1]);
-contour(X_Sweeping,Y,C_Matrix,10,'w','linewidth',1); hold off;
+% contour(X_Sweeping,Y,C_Matrix,10,'w','linewidth',1); hold off;
 view(0,90);
 xlim([0 L]);
 ylim([-W W]/2);
 xticks(0:W/5:L);
 yticks(-W/2:W/10:W/2);
-title('Real part of wave field Pade');
+% title('Real part of wave field Pade');
 
 
 h = gca;
 h.FontSize = 10;
 
-%% compute DtN directly
+figure
+surf(c(X_Sweeping,Y));
 
-e = zeros(size(u(:,1)));
-DtN_matrix = zeros(length(e));
-for i = 1:length(e)
-    e(i) = 1;
-    DtN_matrix(:,i) = DtN(A_constant_k, x_sweeping(1), y_FE, a, b, e);
-    e(i) = 0;
-end
-DtN_matrix(abs(DtN_matrix) < 1e-10) = 0;
+% %% compute DtN directly
+% 
+% e = zeros(size(u(:,1)));
+% DtN_matrix = zeros(length(e));
+% for i = 1:length(e)
+%     e(i) = 1;
+%     DtN_matrix(:,i) = DtN(A_constant_k, x_sweeping(1), y_FE, a, b, e);
+%     e(i) = 0;
+% end
+% DtN_matrix(abs(DtN_matrix) < 1e-10) = 0;
 
 
 %%
@@ -174,7 +208,7 @@ val = -2 * (OMEGA^2 ./ c(x,y).^3) .* dcdx(x,y);
 end
 
 %function for calculating DtN * u_j
-function [u_next] = DtN(A_k, x, y_FE, a_pade, b_pade, u_current)
+function [u_next] = DtN(A_k, x, y_FE, a_pade, b_pade, u_current, f)
 
 global OMEGA
 global N VX
@@ -193,6 +227,7 @@ end
 lambda_1_u = 1i * k(y_FE) .* lambda_1_u; % mult by i*k \sum(...)
 
 lambda_0_u = (spdiags(k_sq(y_FE), 0, size(A_k, 1), size(A_k, 2)) + A_k) \ (-0.25 * d_omega_inv_c2(x, y_FE) .* u_current);
-u_next = lambda_1_u + lambda_0_u;
+
+u_next = lambda_1_u + lambda_0_u + f;
 
 end
