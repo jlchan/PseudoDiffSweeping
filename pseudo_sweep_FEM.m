@@ -2,7 +2,7 @@
 %modified by Jesse Chan 24 Aug 2022
 %modified by Raven Shane Johnson 16 Aug 2022
 
-global c0 alpha OMEGA
+global c0 alpha OMEGA ORDER
 
 W = 1;              % Width of domain
 L = 1;              % Length of domain
@@ -14,7 +14,7 @@ PPWy = 4;           % Points per wavelength in y-direction (tangential)
 ORDER = 2;          % Order of the Pade approximation
 
 c0 = 1;                                             % reference wavespeed
-alpha = 0.25;
+alpha = 0.1;
 lambda = 2 * pi * c0 / OMEGA;                       % reference wavelength
 
 Ny = round(PPWy * W / lambda);                      % N points in y-direction
@@ -54,11 +54,6 @@ x_sweeping = linspace(0,1,Nx);
 invM = spdiags(1 ./ spdiags(M, 0), 0, size(M, 1), size(M, 2));
 A_constant_k = invM * A;
 
-% IC
-u = zeros(Ny, Nx);
-
-u(:, 1) = exp(1i * k(y_FE) .* y_FE);
-
 %%
 
 %SWEEPING IN THE X-DIRECTION
@@ -87,25 +82,46 @@ end
 
 f = @(x) (1 ./ c(x ,y_FE).^2 - 1) .* OMEGA^2 .* exp(1i * OMEGA * x);
     
-%MATRIX FREE EXPLICIT METHOD
+% sweep backwards with zero "final" condition
+u = zeros(Ny, Nx);
+dx_backwards = -dx;
+for j=Nx:-1:2
+    
+    x1 = x_sweeping(:,j);
+    k1 = -DtN(A_constant_k, x1, y_FE, a, b, u(:,j)) + f(x1);
+    u1 = u(:,j) +  dx_backwards * k1;
+    
+    x2 = x1 + dx_backwards;
+    k2 = -DtN(A_constant_k, x2, y_FE, a, b, u1) + f(x2);
+    u2 = u1 + dx_backwards * k2;
+        
+    %Calculate next column of u
+    u(:,j-1) = 0.5 * (u(:,j) + u2);
+    
+    %print current computation step
+    if mod(j, 100) == 0
+        fprintf('On step %d out of %d\n', j, Nx-1)
+    end   
+end
+
+u_backwards = u;
+
+u = zeros(Ny, Nx);
+u(:, 1) = exp(1i * k(y_FE) .* y_FE);
+
+
 for j=1:Nx-1
     
     x1 = x_sweeping(:,j);
-    k1 = DtN(A_constant_k, x1, y_FE, a, b, u(:,j), f(x1));
-    u1 = u(:,j) + 0.5 * dx * k1;
+    k1 = DtN(A_constant_k, x1, y_FE, a, b, u(:,j)) + u_backwards(j);
+    u1 = u(:,j) +  dx * k1;
     
-    x2 = x1 + 0.5 * dx;
-    k2 = DtN(A_constant_k, x2, y_FE, a, b, u1, f(x2));
-    u2 = u(:,j) + 0.5 * dx * k2;
-    
-    k3 = DtN(A_constant_k, x2, y_FE, a, b, u2, f(x2));
-    u3 = u(:,j) + dx * k3;
-    
-    x4 = x1 + dx;
-    k4 = DtN(A_constant_k, x4, y_FE, a, b, u3, f(x4));
-    
+    x2 = x1 + dx;
+    k2 = DtN(A_constant_k, x2, y_FE, a, b, u1) + u_backwards(j+1);
+    u2 = u1 + dx * k2;
+        
     %Calculate next column of u
-    u(:,j+1) = u(:,j) + (dx / 6) * (k1 + 2*k2 + 2*k3 + k4);
+    u(:,j+1) = 0.5 * (u(:,j) + u2);
     
     %print current computation step
     if mod(j, 100) == 0
@@ -175,8 +191,8 @@ yticks(-W/2:W/10:W/2);
 h = gca;
 h.FontSize = 10;
 
-figure
-surf(c(X_Sweeping,Y));
+% figure
+% surf(c(X_Sweeping,Y));
 
 % %% compute DtN directly
 % 
@@ -208,9 +224,9 @@ val = -2 * (OMEGA^2 ./ c(x,y).^3) .* dcdx(x,y);
 end
 
 %function for calculating DtN * u_j
-function [u_next] = DtN(A_k, x, y_FE, a_pade, b_pade, u_current, f)
+function [u_next] = DtN(A_constant_k, x, y_FE, a_pade, b_pade, u_current)
 
-global OMEGA
+global OMEGA ORDER
 global N VX
 
 k = @(y) OMEGA ./ c(x, y);
@@ -220,14 +236,20 @@ inv_k_sq = @(y) 1 ./ k_sq(y);
 
 A_u = (A_variable_k * u_current) ./ diag(M);
 
-lambda_1_u = u_current;
-for j = 1:length(a_pade)
-    lambda_1_u = lambda_1_u + (speye(size(A_variable_k, 1)) + b_pade(j) .* A_variable_k) \ (a_pade(j) .* A_u);
-end
-lambda_1_u = 1i * k(y_FE) .* lambda_1_u; % mult by i*k \sum(...)
+% lambda_1_u = u_current;
+% for j = 1:length(a_pade)
+%     lambda_1_u = lambda_1_u + (speye(size(A_variable_k, 1)) + b_pade(j) .* A_variable_k) \ (a_pade(j) .* A_u);
+% end
+% lambda_1_u = 1i * k(y_FE) .* lambda_1_u; % mult by i*k \sum(...)
 
-lambda_0_u = (spdiags(k_sq(y_FE), 0, size(A_k, 1), size(A_k, 2)) + A_k) \ (-0.25 * d_omega_inv_c2(x, y_FE) .* u_current);
+lambda_1_u = Lambda_1(a_pade, b_pade, A_variable_k, A_u, u_current, k(y_FE));
 
-u_next = lambda_1_u + lambda_0_u + f;
+% lambda_0_u = (spdiags(k_sq(y_FE), 0, size(A_k, 1), size(A_k, 2)) + A_k) \ (-0.25 * d_omega_inv_c2(x, y_FE) .* u_current);
+
+lambda_0_u = Lambda_0(k_sq(y_FE), A_constant_k, d_omega_inv_c2(x, y_FE), u_current);
+
+lambda_neg_1_u = Lambda_Neg_1(u_current);
+
+u_next = lambda_1_u + lambda_0_u + lambda_neg_1_u;
 
 end
