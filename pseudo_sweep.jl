@@ -85,8 +85,8 @@ end
 N = 3
 num_elements = 8
 
-OMEGA = 25 * pi   # Angular frequency
-PPWx = 300        # Points per wavelength in x-direction (marching)
+OMEGA = 100 * pi   # Angular frequency
+PPWx = 200        # Points per wavelength in x-direction (marching)
 ORDER = 2         # Pseudo-diff order
 #pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1 - 0.25 * exp(-25 * ((x-0.5)^2 + y^2)))
 pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1 - .025 * peaks(10 * (x - 0.5), 10 * y))
