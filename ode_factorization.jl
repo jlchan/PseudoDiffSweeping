@@ -96,10 +96,18 @@ function sweep(::RK4, params)
     for i in 1:Nsteps-1
         t_i = t[i]
 
-        # interpolate values 
+        # interpolate values: we rescale the time interval 
+        #     i * dt ---- (i+1) * dt ---- (i+2) * dt ---- (i+3) * dt
+        # to [-1, 1]
+        #     -1      ----   -1/3    ----    1/3     ---- 1
+        # To evaluate in between "i * dt ---- (i+1) * dt" is equivalent to evaluating at 
+        # x_mid = 0.5 * (-1 - 1/3) on the rescaled interval [-1, 1]. We can interpolate 
+        # by computing coefficients L_i(x_mid) where L_i are Lagrange polynomials. 
+        # Then, we just multiply by the nodal coefficients vb[i:i+3]
         if i < Nsteps - 2
             vb_midpoint = dot(SVector(0.3125, 0.9375, -0.3125, 0.0625), vb[i:i+3])
-        else
+        else    
+            # if we are close to the last timestep, we flip the interpolation around. 
             vb_midpoint = dot(SVector(0.0625, -0.3125, 0.9375, 0.3125), vb[i-3:i])
         end
 
