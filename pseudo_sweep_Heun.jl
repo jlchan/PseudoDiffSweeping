@@ -60,12 +60,12 @@ function apply_lambda_1(ORDER, invMA, k, u)
 end
     
 # function for calculating DtN * u_j
-function rhs!(du, u, cache, t)
+function rhs!(du, u, p, t)
 
-    set_c_data!(cache, t)
+    set_c_data!(p, t)
 
-    OMEGA, ORDER, invMA = cache
-    k, d_inv_c2, d2_inv_c2 = cache.c_data
+    OMEGA, ORDER, invMA = p
+    k, d_inv_c2, d2_inv_c2 = p.c_data
 
     k_sq_plus_invMA = lu(Diagonal(k.^2) + invMA) # TODO: rewrite as Diagonal(k.^2 .* w) + A and use `cholesky`
 
@@ -81,22 +81,20 @@ function rhs!(du, u, cache, t)
     @. du = lambda_1_u + lambda_0_u + lambda_n1_u
 end
 
-function rhs(u, cache, t) 
+function rhs(u, p, t) 
     du = fill!(similar(u), zero(eltype(u)))
-    rhs!(du, u, cache, t)
+    rhs!(du, u, p, t)
     return du
 end
        
 N = 3
 num_elements = 8
 
-OMEGA = 400 * pi   # Angular frequency
-PPWx = 10          # Points per wavelength in x-direction (marching)
+OMEGA = 100 * pi   # Angular frequency
+PPWx = 100        # Points per wavelength in x-direction (marching)
 ORDER = 2         # Pseudo-diff order
-# pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1 - 0.25 * exp(-25 * ((x-0.5)^2 + y^2)))
-pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1 - .1 * peaks(10 * (x - 0.5), 10 * y))
-# pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(t,y) -> 1 - 0.25 * exp(-25 * (t-0.5).^2))
-# pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1)
+#pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1 - 0.25 * exp(-25 * ((x-0.5)^2 + y^2)))
+pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1 - .025 * peaks(10 * (x - 0.5), 10 * y))
 
 (; OMEGA, PPWx, ORDER, c) = pseudodiff_params    
 
@@ -106,30 +104,30 @@ rd = RefElemData(Line(), N)
 domain_width, domain_height = 1, 1
 md = MeshData(domain_height / 2 * VY, EToV, rd)                                           
 M, A, y = assemble_FE_matrices(rd, md)
-M_diagonal = Diagonal(vec(sum(M, dims=2))) # lumped mass matrix
+M_diagonal = Diagonal(vec(sum(M, dims=2)))
 invMA = M_diagonal \ A
 Ny = length(y)
 
-dx = 1 / (OMEGA * PPWx)
-Nx = ceil(Int, domain_width / dx)
-x = LinRange(1e-14, domain_width, Nx + 1)
-dx = x[2] - x[1]
+# points in the sweeping direction
+lambda = 2 * pi / OMEGA # reference wavelength
+Nx = ceil(Int, PPWx * domain_width / lambda)  
+dx = domain_width / (Nx - 1)
+x = LinRange(0, domain_width, Nx)
 
 (; c) = pseudodiff_params
 d_inv_c2(x, y) = ForwardDiff.derivative(x -> 1 / c(x, y)^2, x)
 d2_inv_c2(x, y) = ForwardDiff.derivative(x -> d_inv_c2(x, y), x)    
 
-c_data = (; k=similar(y), d_inv_c2=similar(y), d2_inv_c2=similar(y))
+C = c.(x', y)
+d_inv_C2 = d_inv_c2.(x', y)
+d2_inv_C2 = d2_inv_c2.(x', y)
+c_data = (; k=OMEGA ./ C[:,1], d_inv_c2=d_inv_C2[:,1], d2_inv_c2=d2_inv_C2[:,1])
 
 # manufactured plane wave solution
 u_exact(x, y) = exp(1im * OMEGA * x)
 forcing = (x, y) -> (1 / c(x, y)^2 - 1) * OMEGA^2 * exp(1im * OMEGA * x) 
-u_initial(x, y) = u_exact(x, y)
 f = forcing.(x', y)
-
-forcing = (x, y) -> 0 # no manufactured solution
-
-cache = (; OMEGA, ORDER, invMA, c_data, y)
+p = (; OMEGA, ORDER, invMA, c_data, y)
 
 function set_c_data!(p, x)
     (; y, c_data) = p
@@ -139,33 +137,22 @@ function set_c_data!(p, x)
 end
 
 # preallocate u, RHS
-u = zeros(Complex{eltype(y)}, Ny, Nx + 1)
-u_tmp, du, du_accum = ntuple(_ -> similar(u[:, 1]), 3)
+u = zeros(Complex{eltype(y)}, Ny, Nx)
+u1, u2, u3, du = ntuple(_ -> similar(u[:, 1]), 4)
 
 # backwards sweep to "pick up" the forcing
-for i in Nx + 1:-1:2
-    fill!(du_accum, zero(eltype(du_accum)))
-    
-    rhs!(du, u[:,i], cache, x[i]) 
+for i in Nx:-1:2
+    fill!(du, zero(eltype(du)))
+
+    rhs!(du, u[:,i], p, x[i])
     @. du = du - forcing(x[i], y)
-    @. du_accum += du
+    @. u1 = u[:,i] + dx * du
 
-    @. u_tmp = u[:,i] + 0.5 * dx * du
-    rhs!(du, u_tmp, cache, x[i] - 0.5 * dx) 
-    @. du = du - forcing(x[i] - 0.5 * dx, y)
-    @. du_accum += 2 * du
-
-    @. u_tmp = u[:,i] + 0.5 * dx * du
-    rhs!(du, u_tmp, cache, x[i] - 0.5 * dx) 
-    @. du = du - forcing(x[i] - 0.5 * dx, y)
-    @. du_accum += 2 * du
-
-    @. u_tmp = u[:,i] + dx * du
-    rhs!(du, u_tmp, cache, x[i-1]) 
+    rhs!(du, u1, p, x[i-1]) 
     @. du = du - forcing(x[i-1], y)
-    @. du_accum += du
-    
-    @. u[:,i-1] = u[:,i] + (dx / 6) * du_accum
+    @. u2 = u1 + dx * du
+
+    @. u[:,i-1] = 0.5 * (u[:,i] + u2)
 
     if i % 100 == 0
         println("On step $i out of $(Nx-1)")
@@ -174,41 +161,17 @@ end
 
 u_backwards = copy(u)
 
-# temp memory for interpolation
-u_backwards_mid = similar(u_backwards[:,1])
-
-fill!(u, zero(eltype(u)))
-u[:,1] .= u_initial.(x[1], y)
-for i in 1:Nx
-
-    if i < Nx - 2
-        @. u_backwards_mid = 0.3125 * u_backwards[:, i] + 0.9375 * u_backwards[:, i+1] - 0.3125 * u_backwards[:, i+2] + 0.0625 * u_backwards[:, i+3]
-    else
-        @. u_backwards_mid = 0.3125 * u_backwards[:, i] + 0.9375 * u_backwards[:, i-1] - 0.3125 * u_backwards[:, i-2] + 0.0625 * u_backwards[:, i-3]
-    end
-
-    fill!(du_accum, zero(eltype(du_accum)))
-    
-    rhs!(du, u[:,i], cache, x[i]) 
+u[:,1] .= one(eltype(u))
+for i in 1:Nx-1
+    rhs!(du, u[:,i], p, x[i])
     @. du = du + u_backwards[:, i]
-    @. du_accum += du  
+    @. u1 = u[:,i] + dx * du
 
-    @. u_tmp = u[:,i] + 0.5 * dx * du
-    rhs!(du, u_tmp, cache, x[i] + 0.5 * dx) 
-    @. du = du + u_backwards_mid
-    @. du_accum += 2 * du
-
-    @. u_tmp = u[:,i] + 0.5 * dx * du
-    rhs!(du, u_tmp, cache, x[i] + 0.5 * dx) 
-    @. du = du + u_backwards_mid
-    @. du_accum += 2 * du
-
-    @. u_tmp = u[:,i] + dx * du
-    rhs!(du, u_tmp, cache, x[i+1]) 
+    rhs!(du, u1, p, x[i+1]) 
     @. du = du + u_backwards[:, i+1]
-    @. du_accum += du 
+    @. u2 = u1 + dx * du
 
-    @. u[:,i+1] = u[:,i] + (dx / 6) * du_accum
+    @. u[:, i+1] = 0.5 * (u[:, i] + u2)
 
     if i % 100 == 0
         println("On step $i out of $(Nx-1)")
@@ -216,11 +179,11 @@ for i in 1:Nx
 end
 
 error = u - u_exact.(x', y)
-w = repeat(diag(M_diagonal), 1, Nx+1)
+w = repeat(diag(M_diagonal), 1, Nx)
 w = domain_width * domain_height * w / sum(w) 
 L2_error = sqrt(dot(w, @. abs(error)^2))
 
 # using Plots
 # gr(leg=false)
-# GLMakie.contourf(x, y, abs.(error), c=:viridis, leg=false)
+# contourf(x, y, abs.(error), c=:viridis)
 # title!("L2 error = $L2_error")
