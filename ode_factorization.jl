@@ -1,22 +1,19 @@
 using Plots
 using StaticArrays
 using ForwardDiff
+using LinearAlgebra
 
-ω = 40 * pi
-ppw = 80
+struct RK4 end
+struct Heun end
 
-dt = 1 / (ω * ppw)
-
-FinalTime = 1.0
-Nsteps = ceil(Int, FinalTime / dt)
-dt = FinalTime / Nsteps
-t = LinRange(1e-14, FinalTime, Nsteps)
+ω = 100 * pi
+ppw = 10
 
 # d2p/dt2 + ω^2 / c^2 * p = f 
 p(t) = exp(im * ω * t)
-# c = t -> 1
-# c = t -> 1 - 0.25 * exp(-25 * (t-0.5).^2)
-c = t -> 1 - 0.25 * sin(2 * pi * t)
+c = t -> 1
+c = t -> 1 - 0.25 * exp(-25 * (t-0.5).^2)
+# c = t -> 1 - 0.25 * sin(2 * pi * t)
 # d_inv_c_dt(t) = ForwardDiff.derivative(t -> 1 / c(t), t)
 dcdt(t) = ForwardDiff.derivative(t -> c(t), t)
 d2cdt2(t) = ForwardDiff.derivative(dcdt, t)
@@ -42,12 +39,17 @@ function sweep(::Heun, params)
 
     # backwards sweep with zero final BC
     v[end] = zero(ComplexF64)
-    dt_backwards = -dt
+    # dt_backwards = -dt
     for i in Nsteps:-1:2
-        dv1 = rhs_backward(v[i], params, t[i]) + f(t[i])
-        v1 = v[i] + dt_backwards * dv1
-        dv2 = rhs_backward(v1, params, t[i-1]) + f(t[i-1])    
-        v2 = v1 + dt_backwards * dv2
+        # dv1 = rhs_backward(v[i], params, t[i]) + f(t[i])
+        # v1 = v[i] + dt_backwards * dv1
+        # dv2 = rhs_backward(v1, params, t[i-1]) + f(t[i-1])    
+        # v2 = v1 + dt_backwards * dv2
+        dv1 = rhs_forward(v[i], params, t[i]) - f(t[i])
+        v1 = v[i] + dt * dv1
+        dv2 = rhs_forward(v1, params, t[i-1]) - f(t[i-1])    
+        v2 = v1 + dt * dv2
+
         v[i-1] = 0.5 * (v[i] + v2)
     end
 
@@ -75,20 +77,18 @@ function sweep(::RK4, params)
 
     # backwards sweep with zero final BC
     v[end] = zero(ComplexF64)
-    dt_backwards = -dt
-    t_i = t[end]
     for i in Nsteps: -1: 2
-        dv1 = rhs_backward(v[i], params, t_i) + f(t_i)
-        dv2 = rhs_backward(v[i] + 0.5 * dt_backwards * dv1, params, t_i + 0.5 * dt_backwards) + f(t_i + 0.5 * dt_backwards)
-        dv3 = rhs_backward(v[i] + 0.5 * dt_backwards * dv2, params, t_i + 0.5 * dt_backwards) + f(t_i + 0.5 * dt_backwards)
-        dv4 = rhs_backward(v[i] + dt_backwards * dv3,       params, t_i + dt_backwards)       + f(t_i + dt_backwards)
+        t_i = t[i]
+        dv1 = rhs_forward(v[i], params, t_i) - f(t_i)
+        dv2 = rhs_forward(v[i] + 0.5 * dt * dv1, params, t_i - 0.5 * dt) - f(t_i - 0.5 * dt)
+        dv3 = rhs_forward(v[i] + 0.5 * dt * dv2, params, t_i - 0.5 * dt) - f(t_i - 0.5 * dt)
+        dv4 = rhs_forward(v[i] + dt * dv3,       params, t_i - dt)       - f(t_i - dt)
         
-        v[i-1] = v[i] + dt_backwards * (1/6) * (dv1 + 2*dv2 + 2*dv3 + dv4)
-
-        t_i += dt_backwards
+        v[i-1] = v[i] + dt * (1/6) * (dv1 + 2*dv2 + 2*dv3 + dv4)        
     end
 
     vb = copy(v)
+    # @show norm(vb)
 
     # forward sweep with backwards sweep vb as source
     v = zeros(ComplexF64, Nsteps)
@@ -108,7 +108,7 @@ function sweep(::RK4, params)
             vb_midpoint = dot(SVector(0.3125, 0.9375, -0.3125, 0.0625), vb[i:i+3])
         else    
             # if we are close to the last timestep, we flip the interpolation around. 
-            vb_midpoint = dot(SVector(0.0625, -0.3125, 0.9375, 0.3125), vb[i-3:i])
+            vb_midpoint = dot(SVector(0.3125, 0.9375, -0.3125, 0.0625), vb[i:-1:i-3])
         end
 
         dv1 = rhs_forward(v[i], params, t_i) + vb[i]
@@ -118,15 +118,15 @@ function sweep(::RK4, params)
 
         v[i+1] = v[i] + dt * (1/6) * (dv1 + 2*dv2 + 2*dv3 + dv4)
     end
-    return v
+    return v, vb
 end
 
 function t_ppw(ω, ppw)
     FinalTime = 1.0
     dt = 1 / (ω * ppw)
     Nsteps = ceil(Int, FinalTime / dt)
-    dt = FinalTime / Nsteps
-    return LinRange(1e-14, FinalTime, Nsteps + 1)
+    # dt = FinalTime / Nsteps
+    return LinRange(1e-14, FinalTime, Nsteps+1)
 end
 
 function setup(ω, ppw)
@@ -141,6 +141,7 @@ end
 
 function compute_err(method, ω, ppw) 
     p, parameters = setup(ω, ppw)
-    v = sweep(method, parameters)
-    return maximum(abs.(v - p.(parameters.t)))    
+    v, _ = sweep(method, parameters)
+    @show maximum(abs.(v - p.(parameters.t)))
+    return abs.(v - p.(parameters.t))
 end
