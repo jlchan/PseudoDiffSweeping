@@ -29,27 +29,6 @@ function assemble_FE_matrices(rd, md; diffusivity_function = x -> 1.0)
     return M, A, x
 end
 
-# # parameters for computing the Λ₁ pseudodifferential operator using a rational 
-# # Pade approximation sqrt(A + B) ≈ ∑ (a_j * B * u) / (A + b_j * B) 
-# # Usually, A = Diagonal(k^2) and B = M \ (FE Laplacian)
-# struct Lambda_1{TA, TB, Ttmp}
-#     ORDER::Int
-#     A::TA
-#     B::TB
-#     tmp_storage::Ttmp
-# end
-
-# function (pade::Lambda_1)(u)
-#     (; A, B, tmp_storage, ORDER) = pade
-#     a_pade, b_pade = pade_coefficients(ORDER)
-#     @. tmp_storage = u
-#     for j in 1:length(a_pade)
-#         tmp_storage .+= (A + b_pade[j] .* B) \ (a_pade[j] .* (B * u));
-#     end
-#     @. tmp_storage = 1im * k * tmp_storage # mult by i*k \sum(...)    
-#     return tmp_storage 
-# end
-
 function apply_lambda_1(ORDER, invMA, k, u)    
     a_pade, b_pade = pade_coefficients(ORDER)
     lambda_1_u = copy(u)
@@ -80,21 +59,19 @@ function rhs!(du, u, cache, t)
 
     @. du = lambda_1_u + lambda_0_u + lambda_n1_u
 end
-
-function rhs(u, cache, t) 
-    du = fill!(similar(u), zero(eltype(u)))
-    rhs!(du, u, cache, t)
-    return du
-end
        
 N = 3
-num_elements = 8
+num_elements = 16
 
-OMEGA = 400 * pi   # Angular frequency
-PPWx = 10          # Points per wavelength in x-direction (marching)
-ORDER = 2         # Pseudo-diff order
+OMEGA = 40 * pi         # Angular frequency
+PPWx = 10         # Points per wavelength in x-direction (marching)
+ORDER = 3         # Pseudo-diff order
 # pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1 - 0.25 * exp(-25 * ((x-0.5)^2 + y^2)))
-pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1 - .1 * peaks(10 * (x - 0.5), 10 * y))
+# kappa = (x,y) -> 1 + 1.5 * exp(-160 * ((x-0.5)^2 + y^2)) # kappa^2 * (1 - b(x)) <---> OMEGA^2 / c^2
+# smoothed_step(x) = 0.5 * (tanh(25^2 * (x + .05)) + tanh(-25^2 * (x-.05)))
+# kappa = (x,y) -> 1 + 4 * smoothed_step((x-0.5)^2 + y^2) # kappa^2 * (1 - b(x)) <---> OMEGA^2 / c^2
+kappa = (x,y) -> 1 + 1.5 * exp(-160 * ((x-0.5)^2 + y^2)) # kappa^2 * (1 - b(x)) <---> OMEGA^2 / c^2
+pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1 / sqrt(kappa(x, y)))
 # pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(t,y) -> 1 - 0.25 * exp(-25 * (t-0.5).^2))
 # pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1)
 
@@ -224,3 +201,4 @@ L2_error = sqrt(dot(w, @. abs(error)^2))
 # gr(leg=false)
 # GLMakie.contourf(x, y, abs.(error), c=:viridis, leg=false)
 # title!("L2 error = $L2_error")
+contourf(x, y, real.(u), c=:viridis, leg=false, ratio=1)
