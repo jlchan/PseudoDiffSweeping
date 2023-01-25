@@ -2,9 +2,9 @@ using SpecialFunctions
 using OrdinaryDiffEq
 using ForwardDiff
 
-kappa = 20 * pi
-r0 = 1e-10
-R = 1/3 # b(R) = 1e-8 here, so probably below our error threshhold
+kappa = 100 # * pi
+r0 = 1e-11
+R = .25 # b(R) is the error threshhold
 
 b(r) = -1.5 * exp(-160 * (r)^2)
 
@@ -31,7 +31,7 @@ function compute_scattering_phase(l, kappa, r0, R)
     # solve ODE 
     tspan = (r0, R)
     ode = ODEProblem(rhs!, u0, tspan, parameters)
-    sol = solve(ode, Vern7(); save_everystep=false, abstol=1e-15, reltol=1e-15)
+    sol = solve(ode, Vern7(); save_everystep=false, abstol=1e-14, reltol=1e-14)
 
     # compute scattering phases
     dhankelh1(nu, z) = ForwardDiff.derivative(z -> hankelh1(nu, z), z)
@@ -46,7 +46,7 @@ struct ScatteringExpansion{T1, T2}
     scattering_phases::T2
 end
 
-function ScatteringExpansion(kappa; L=30)
+function ScatteringExpansion(kappa; L=40)
     a = zeros(ComplexF64, L+1)
     for l in 0:L
         r0 = 1e-10 
@@ -73,22 +73,24 @@ function (f::ScatteringExpansion)(r, θ)
     return val + exp(im * kappa * x)
 end
 
+sc = ScatteringExpansion(kappa; L=40)
+
 x = 1
 y = 0.5
 θ = atan.(y, x)
 r = @. sqrt(x^2 + y^2)
-sc = ScatteringExpansion(kappa; L=30)
 u = sc(r, θ)
 
 using Plots: Plots
 
-xx = LinRange(-.5, .5, 200)
-yy = LinRange(-.5, .5, 200)
+xx = LinRange(-.5, .5, 250)
+yy = LinRange(-.5, .5, 250)
 x = @. xx + 0 * yy'; 
 y = @. 0 * xx + yy'; 
 θ = atan.(y, x)
 r = @. sqrt(x^2 + y^2)
 u = sc.(r, θ)
-Plots.contourf(xx, yy, real.(u)', leg=false, clims=(-2, 2), c=:viridis, ratio=1)
+u[@. r < R] .= NaN
+Plots.contourf(xx, yy, real.(u)', leg=false, clims=(-2.5, 2.5), c=:viridis, ratio=1)
 
 # # Plots.plot(x, real.(exp.(im * kappa * x) - pw_expansion.(x, θ)), leg=false)

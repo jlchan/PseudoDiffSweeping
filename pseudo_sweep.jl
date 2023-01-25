@@ -4,14 +4,10 @@ using LinearAlgebra
 using ForwardDiff
 using StaticArrays
 
-peaks(x, y) = 3 * (1-x)^2 * exp(-(x.^2) - (y+1).^2) - 
-              10 * (x / 5 - x^3 - y^5) * exp(-x^2 - y^2) - 
-              1/3 * exp(-(x+1)^2 - y^2) 
-
 function pade_coefficients(N)
     a = SVector{N}((2 / (2 * N + 1) * sin(i * pi / (2 * N + 1))^2 for i in 1:N))
     b = SVector{N}((cos(i * pi / (2 * N + 1))^2 for i in 1:N))
-    alpha = pi / 6 # this needs to be non-zero for stability?
+    alpha = pi / 6 # this needs to be non-zero for stability
     e_scaling = exp(-im * alpha) - 1
     alpha_0 = exp(im * alpha / 2) * (1 + sum((a .* e_scaling) ./ (1 .+ b .* e_scaling)))
     a_alpha = (a * exp(-im * alpha / 2)) ./ (1 .+ b * e_scaling).^2
@@ -19,7 +15,12 @@ function pade_coefficients(N)
     return alpha_0, a_alpha, b_alpha
 end
 
-function assemble_FE_matrices(rd, md)
+# construct approximation of the tangential derivative operator
+function assemble_FE_matrix(N, num_elements, domain_height)
+    rd = RefElemData(Line(), N)
+    (VY,), EToV = uniform_mesh(Line(), num_elements)
+    md = MeshData(domain_height / 2 * VY, EToV, rd)                                           
+
     M = spzeros(rd.N * md.num_elements + 1, rd.N * md.num_elements + 1)
     A = spzeros(rd.N * md.num_elements + 1, rd.N * md.num_elements + 1)
     x = zeros(rd.N * md.num_elements + 1)
@@ -30,20 +31,10 @@ function assemble_FE_matrices(rd, md)
         x[ids] .= view(md.x, :, e)
     end
 
-    A = -A # use d^2/dx^2 instead of -d^2/dx^2
+    @. A = -A # use d^2/dx^2 instead of -d^2/dx^2
     M_diagonal = Diagonal(vec(sum(M, dims=2))) # lumped mass matrix    
 
-    return (M_diagonal \ K), y
-end
-
-# invMA ≈ -d^2/dx^2
-function apply_lambda_1(lambda_1_u, ORDER, A, k, u)
-    alpha_0, a_pade, b_pade = pade_coefficients(ORDER)
-    @. lambda_1_u = alpha_0 * u
-    for (a, b) in zip(a_pade, b_pade)
-        lambda_1_u .+= (Diagonal(k.^2) + b .* A) \ (a .* (A * u));
-    end
-    @. lambda_1_u = 1im * k * lambda_1_u # mult by i*k \sum(...)    
+    return (M_diagonal \ A), x, diag(M_diagonal)
 end
     
 # function for calculating DtN * u_j
@@ -52,12 +43,16 @@ function rhs!(du, u, cache, t)
     set_c_data!(cache, t)
     OMEGA, ORDER, A = cache
     k, c, inv_c2, d_inv_c2, d2_inv_c2 = cache.c_data
-    # k_sq_plus_invMA = lu(Diagonal(k.^2) + invMA) # TODO: rewrite as Diagonal(k.^2 .* w) + A and use `cholesky`
 
     fill!(du, zero(eltype(du)))
 
     # λ_1(u)
-    apply_lambda_1(du, ORDER, A, k, u)
+    alpha_0, a_pade, b_pade = pade_coefficients(ORDER)
+    @. du = alpha_0 * u
+    for (a, b) in zip(a_pade, b_pade)
+        du .+= (Diagonal(k.^2) + b .* A) \ (a .* (A * u));
+    end
+    @. du *= 1im * k # mult by i*k \sum(...)
 
     # λ_0(u) = -1/4 * ∂(1/c^2)) / c^2 + O(1/ω^2)
     @. du += (-0.25 * d_inv_c2 ./ inv_c2 .* u)
@@ -65,38 +60,30 @@ function rhs!(du, u, cache, t)
     # λ_{-1}(u) = im * c / (8 * OMEGA) * (...) + O(1/ω^3)
     @. du += im * c / (8 * OMEGA) * (5/4 * (d_inv_c2 / inv_c2)^2 - d2_inv_c2 / inv_c2) * u
 end
-      
-N = 3
-num_elements = 16
 
-OMEGA = 50 * 6/4          # Angular frequency
+# create FE discretization    
+N = 4
+num_elements = 32
+domain_width, domain_height = 1, 1
+A, y, w1D = assemble_FE_matrix(N, num_elements, domain_height)
+
+OMEGA = 100           # Angular frequency
 PPWx  = 5            # Points per wavelength in x-direction (marching)
 ORDER = 3            # Pseudo-diff order
-#one_minus_b = (x,y) -> 1 + 1.5 * exp(-160 * ((x-0.5)^2 + y^2)) # OMEGA^2 * (1 - b(x)) <---> OMEGA^2 / c^2
-one_minus_b = (x,y) -> 1 + 1.5 * exp(-160 * ((x-0.5)^2 + y^2)) # OMEGA^2 * (1 - b(x)) <---> OMEGA^2 / c^2
-# (1-b(x)) = 1/c^2 ------> c = 1 / sqrt(1-b(x))
-pseudodiff_params = (; OMEGA, PPWx, ORDER, c = (x,y) -> 1 / sqrt(one_minus_b(x, y)))
-# pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(t,y) -> 1 - 0.1 * exp(-25 * (t-0.5).^2))
-# pseudodiff_params = (; OMEGA, PPWx, ORDER, c=(x,y) -> 1)
-
-(; OMEGA, PPWx, ORDER, c) = pseudodiff_params    
-
-# create FE discretization
-domain_width, domain_height = 1, 1
-rd = RefElemData(Line(), N)
-(VY,), EToV = uniform_mesh(Line(), num_elements)
-md = MeshData(domain_height / 2 * VY, EToV, rd)                                           
-A, y = assemble_FE_matrices(rd, md)
 
 Nx = ceil(Int, domain_width * OMEGA * PPWx)
 Ny = length(y)
 x = LinRange(1e-14, domain_width, Nx + 1)
 dx = x[2] - x[1]
 
-(; c) = pseudodiff_params
+peaks(x, y) = 3 * (1-x)^2 * exp(-(x.^2) - (y+1).^2) - 
+              10 * (x / 5 - x^3 - y^5) * exp(-x^2 - y^2) - 
+              1/3 * exp(-(x+1)^2 - y^2) 
+
+one_minus_b = (x,y) -> 1 + 1.5 * exp(-160 * ((x-0.5)^2 + y^2)) # OMEGA^2 * (1 - b(x)) <---> OMEGA^2 / c^2
+c(x,y) = 1 / sqrt(one_minus_b(x, y)) # (1 - b(x)) = 1/c^2 ------> c = 1 / sqrt(1-b(x))
 d_inv_c2(x, y) = ForwardDiff.derivative(x -> 1 / c(x, y)^2, x)
 d2_inv_c2(x, y) = ForwardDiff.derivative(x -> d_inv_c2(x, y), x)    
-
 c_data = (; k=similar(y), c = similar(y), inv_c2=similar(y), d_inv_c2=similar(y), d2_inv_c2=similar(y))
 
 # manufactured plane wave solution
@@ -201,12 +188,10 @@ for i in 1:Nx
 end
 
 error = u - u_exact.(x', y)
-w = repeat(diag(M_diagonal), 1, Nx+1)
+w = repeat(w1D, 1, Nx+1)
 w = domain_width * domain_height * w / sum(w) 
 L2_error = sqrt(dot(w, @. abs(error)^2))
 @show L2_error
 
 using Plots
-# title!("L2 error = $L2_error")
 contourf(x, y, real.(u), c=:viridis, leg=false, ratio=1)
-# GLMakie.contourf(x, y, real.(u)', c=:viridis, leg=false)
