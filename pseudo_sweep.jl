@@ -11,7 +11,7 @@ peaks(x, y) = 3 * (1-x)^2 * exp(-(x.^2) - (y+1).^2) -
 function pade_coefficients(N)
     a = SVector{N}((2 / (2 * N + 1) * sin(i * pi / (2 * N + 1))^2 for i in 1:N))
     b = SVector{N}((cos(i * pi / (2 * N + 1))^2 for i in 1:N))
-    alpha = pi / 5
+    alpha = pi / 6 # this needs to be non-zero for stability?
     e_scaling = exp(-im * alpha) - 1
     alpha_0 = exp(im * alpha / 2) * (1 + sum((a .* e_scaling) ./ (1 .+ b .* e_scaling)))
     a_alpha = (a * exp(-im * alpha / 2)) ./ (1 .+ b * e_scaling).^2
@@ -19,66 +19,60 @@ function pade_coefficients(N)
     return alpha_0, a_alpha, b_alpha
 end
 
-function assemble_FE_matrices(rd, md; diffusivity_function = x -> 1.0)
-    Vrq = rd.Vq * rd.Dr
-    diffusivity = diffusivity_function.(md.xq)
+function assemble_FE_matrices(rd, md)
     M = spzeros(rd.N * md.num_elements + 1, rd.N * md.num_elements + 1)
     A = spzeros(rd.N * md.num_elements + 1, rd.N * md.num_elements + 1)
     x = zeros(rd.N * md.num_elements + 1)
     for e in 1:md.num_elements
         ids = (1:N+1) .+ (e-1) * rd.N        
-        A[ids, ids] .+= 1.0 / md.J[1, e] * Vrq' * diagm(rd.wq .* view(diffusivity, :, e)) * Vrq
+        A[ids, ids] .+= 1.0 / md.J[1, e] * rd.Dr' * rd.M * rd.Dr
         M[ids, ids] .+= md.J[1, e] * rd.M
         x[ids] .= view(md.x, :, e)
     end
-    return M, A, x
+
+    A = -A # use d^2/dx^2 instead of -d^2/dx^2
+    M_diagonal = Diagonal(vec(sum(M, dims=2))) # lumped mass matrix    
+
+    return (M_diagonal \ K), y
 end
 
 # invMA ≈ -d^2/dx^2
-function apply_lambda_1(ORDER, invMA, k, u)
+function apply_lambda_1(lambda_1_u, ORDER, A, k, u)
     alpha_0, a_pade, b_pade = pade_coefficients(ORDER)
-    lambda_1_u = copy(u) * alpha_0
-    # LB = Diagonal(1 ./ k.^2) * invMA    
-    LB = invMA
+    @. lambda_1_u = alpha_0 * u
     for (a, b) in zip(a_pade, b_pade)
-        lambda_1_u .+= (Diagonal(k.^2) + b .* LB) \ (a .* (LB * u));
-        # lambda_1_u .+= (I + b .* LB) \ (a .* (LB * u));
+        lambda_1_u .+= (Diagonal(k.^2) + b .* A) \ (a .* (A * u));
     end
-    return 1im * k .* lambda_1_u # mult by i*k \sum(...)    
+    @. lambda_1_u = 1im * k * lambda_1_u # mult by i*k \sum(...)    
 end
     
 # function for calculating DtN * u_j
 function rhs!(du, u, cache, t)
 
     set_c_data!(cache, t)
-    OMEGA, ORDER, invMA = cache
-    k, d_inv_c2, d2_inv_c2 = cache.c_data
-    k_sq_plus_invMA = lu(Diagonal(k.^2) + invMA) # TODO: rewrite as Diagonal(k.^2 .* w) + A and use `cholesky`
+    OMEGA, ORDER, A = cache
+    k, c, inv_c2, d_inv_c2, d2_inv_c2 = cache.c_data
+    # k_sq_plus_invMA = lu(Diagonal(k.^2) + invMA) # TODO: rewrite as Diagonal(k.^2 .* w) + A and use `cholesky`
+
+    fill!(du, zero(eltype(du)))
 
     # λ_1(u)
-    lambda_1_u = apply_lambda_1(ORDER, invMA, k, u)
+    apply_lambda_1(du, ORDER, A, k, u)
 
-    # λ_0(u) = -1/4 * (ω^2 * ∂(1/c^2)) / (k^2 + σ)
-    lambda_0_u = k_sq_plus_invMA \ (-0.25 * OMEGA^2 * d_inv_c2 .* u)
+    # λ_0(u) = -1/4 * ∂(1/c^2)) / c^2 + O(1/ω^2)
+    @. du += (-0.25 * d_inv_c2 ./ inv_c2 .* u)
 
-    # λ_{-1}(u)
-    # -1/4 [(k^2 + σ) (ω^2 ∂^2(1/c^2)) u - ω^2 * ∂(1/c^2) * u] / (k^2 + σ)^2 + ...
-    tmp_1 = -0.25 * ((Diagonal(k.^2) + invMA) * (OMEGA^2 * d2_inv_c2 .* u) - (OMEGA^2 * d_inv_c2).^2 .* u)
-    tmp_1 .= k_sq_plus_invMA \ (k_sq_plus_invMA \ tmp_1)
-    # ... + (1/4 * ω^2 * ∂(1/c^2))^2 * u / (k^2 + σ^2)
-    tmp_2 = k_sq_plus_invMA \ (k_sq_plus_invMA \ ((0.25 * OMEGA^2 * d_inv_c2).^2 .* u)) 
-    @. tmp_2 = 0.5 * (tmp_1 + tmp_2)
-    lambda_n1_u = k_sq_plus_invMA \ apply_lambda_1(ORDER, invMA, k, tmp_2)
-
-    @. du = lambda_1_u + lambda_0_u + lambda_n1_u
+    # λ_{-1}(u) = im * c / (8 * OMEGA) * (...) + O(1/ω^3)
+    @. du += im * c / (8 * OMEGA) * (5/4 * (d_inv_c2 / inv_c2)^2 - d2_inv_c2 / inv_c2) * u
 end
-       
-N = 1
-num_elements = 20
+      
+N = 3
+num_elements = 16
 
-OMEGA = 50          # Angular frequency
-PPWx  = 5          # Points per wavelength in x-direction (marching)
-ORDER = 4           # Pseudo-diff order
+OMEGA = 50 * 6/4          # Angular frequency
+PPWx  = 5            # Points per wavelength in x-direction (marching)
+ORDER = 3            # Pseudo-diff order
+#one_minus_b = (x,y) -> 1 + 1.5 * exp(-160 * ((x-0.5)^2 + y^2)) # OMEGA^2 * (1 - b(x)) <---> OMEGA^2 / c^2
 one_minus_b = (x,y) -> 1 + 1.5 * exp(-160 * ((x-0.5)^2 + y^2)) # OMEGA^2 * (1 - b(x)) <---> OMEGA^2 / c^2
 # (1-b(x)) = 1/c^2 ------> c = 1 / sqrt(1-b(x))
 pseudodiff_params = (; OMEGA, PPWx, ORDER, c = (x,y) -> 1 / sqrt(one_minus_b(x, y)))
@@ -88,30 +82,22 @@ pseudodiff_params = (; OMEGA, PPWx, ORDER, c = (x,y) -> 1 / sqrt(one_minus_b(x, 
 (; OMEGA, PPWx, ORDER, c) = pseudodiff_params    
 
 # create FE discretization
+domain_width, domain_height = 1, 1
 rd = RefElemData(Line(), N)
 (VY,), EToV = uniform_mesh(Line(), num_elements)
-domain_width, domain_height = 1, 1
 md = MeshData(domain_height / 2 * VY, EToV, rd)                                           
-M, A, y = assemble_FE_matrices(rd, md)
+A, y = assemble_FE_matrices(rd, md)
 
-# use d^2/dx^2 instead of -d^2/dx^2
-A = -A
-
-M_diagonal = Diagonal(vec(sum(M, dims=2))) # lumped mass matrix
-invMA = (M_diagonal \ A)
+Nx = ceil(Int, domain_width * OMEGA * PPWx)
 Ny = length(y)
-
-dx = 1 / (OMEGA * PPWx)
-Nx = ceil(Int, domain_width / dx)
 x = LinRange(1e-14, domain_width, Nx + 1)
-# x = LinRange(-0.5, -0.5 + domain_width, Nx + 1)
 dx = x[2] - x[1]
 
 (; c) = pseudodiff_params
 d_inv_c2(x, y) = ForwardDiff.derivative(x -> 1 / c(x, y)^2, x)
 d2_inv_c2(x, y) = ForwardDiff.derivative(x -> d_inv_c2(x, y), x)    
 
-c_data = (; k=similar(y), d_inv_c2=similar(y), d2_inv_c2=similar(y))
+c_data = (; k=similar(y), c = similar(y), inv_c2=similar(y), d_inv_c2=similar(y), d2_inv_c2=similar(y))
 
 # manufactured plane wave solution
 u_exact(x, y) = exp(1im * OMEGA * x)
@@ -125,11 +111,13 @@ f = forcing.(x', y)
 
 forcing = (x, y) -> 0 # no manufactured solution
 
-cache = (; OMEGA, ORDER, invMA, c_data, y)
+cache = (; OMEGA, ORDER, A, c_data, y)
 
 function set_c_data!(p, x)
     (; y, c_data) = p
     @. c_data.k = OMEGA ./ c(x, y)
+    @. c_data.c = c(x, y)
+    @. c_data.inv_c2 = 1 / c(x, y)^2
     @. c_data.d_inv_c2 = d_inv_c2(x, y)
     @. c_data.d2_inv_c2 = d2_inv_c2(x, y)
 end
@@ -181,6 +169,7 @@ for i in 1:Nx
         @. u_backwards_mid = 0.3125 * u_backwards[:, i] + 0.9375 * u_backwards[:, i+1] - 0.3125 * u_backwards[:, i+2] + 0.0625 * u_backwards[:, i+3]
     else
         @. u_backwards_mid = 0.3125 * u_backwards[:, i] + 0.9375 * u_backwards[:, i-1] - 0.3125 * u_backwards[:, i-2] + 0.0625 * u_backwards[:, i-3]
+        # @. u_backwards_mid = 0.3125 * u_backwards[:, i+1] + 0.9375 * u_backwards[:, i] - 0.3125 * u_backwards[:, i-1] + 0.0625 * u_backwards[:, i-2]
     end
 
     fill!(du_accum, zero(eltype(du_accum)))
@@ -215,9 +204,9 @@ error = u - u_exact.(x', y)
 w = repeat(diag(M_diagonal), 1, Nx+1)
 w = domain_width * domain_height * w / sum(w) 
 L2_error = sqrt(dot(w, @. abs(error)^2))
+@show L2_error
 
 using Plots
-plotly()
 # title!("L2 error = $L2_error")
 contourf(x, y, real.(u), c=:viridis, leg=false, ratio=1)
 # GLMakie.contourf(x, y, real.(u)', c=:viridis, leg=false)
