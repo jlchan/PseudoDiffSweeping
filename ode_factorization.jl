@@ -6,15 +6,14 @@ using LinearAlgebra
 struct RK4 end
 struct Heun end
 
-ω = 100 * pi
-ppw = 10
+# ω = 100 * pi
 
-# d2p/dt2 + ω^2 / c^2 * p = f 
-p(t) = exp(im * ω * t)
+# # d2p/dt2 + ω^2 / c^2 * p = f 
+# p(t) = exp(im * ω * t)
+
 c = t -> 1
 c = t -> 1 - 0.25 * exp(-25 * (t-0.5).^2)
-# c = t -> 1 - 0.25 * sin(2 * pi * t)
-# d_inv_c_dt(t) = ForwardDiff.derivative(t -> 1 / c(t), t)
+c = t -> 1 - 0.25 * sin(2 * pi * t)
 dcdt(t) = ForwardDiff.derivative(t -> c(t), t)
 d2cdt2(t) = ForwardDiff.derivative(dcdt, t)
 
@@ -39,17 +38,12 @@ function sweep(::Heun, params)
 
     # backwards sweep with zero final BC
     v[end] = zero(ComplexF64)
-    # dt_backwards = -dt
+    dt_backwards = -dt
     for i in Nsteps:-1:2
-        # dv1 = rhs_backward(v[i], params, t[i]) + f(t[i])
-        # v1 = v[i] + dt_backwards * dv1
-        # dv2 = rhs_backward(v1, params, t[i-1]) + f(t[i-1])    
-        # v2 = v1 + dt_backwards * dv2
-        dv1 = rhs_forward(v[i], params, t[i]) - f(t[i])
-        v1 = v[i] + dt * dv1
-        dv2 = rhs_forward(v1, params, t[i-1]) - f(t[i-1])    
-        v2 = v1 + dt * dv2
-
+        dv1 = rhs_backward(v[i], params, t[i]) + f(t[i])
+        v1 = v[i] + dt_backwards * dv1
+        dv2 = rhs_backward(v1, params, t[i-1]) + f(t[i-1])    
+        v2 = v1 + dt_backwards * dv2
         v[i-1] = 0.5 * (v[i] + v2)
     end
 
@@ -118,14 +112,13 @@ function sweep(::RK4, params)
 
         v[i+1] = v[i] + dt * (1/6) * (dv1 + 2*dv2 + 2*dv3 + dv4)
     end
-    return v, vb
+    return v
 end
 
 function t_ppw(ω, ppw)
     FinalTime = 1.0
     dt = 1 / (ω * ppw)
     Nsteps = ceil(Int, FinalTime / dt)
-    # dt = FinalTime / Nsteps
     return LinRange(1e-14, FinalTime, Nsteps+1)
 end
 
@@ -141,7 +134,14 @@ end
 
 function compute_err(method, ω, ppw) 
     p, parameters = setup(ω, ppw)
-    v, _ = sweep(method, parameters)
-    @show maximum(abs.(v - p.(parameters.t)))
-    return abs.(v - p.(parameters.t))
+    v = sweep(method, parameters)
+    return maximum(abs.(v .- p.(parameters.t)))
 end
+
+omega = 25 * pi
+
+ppw = 5:80
+plot(inv.(omega * ppw), [compute_err(Heun(), omega, ppw) for ppw in ppw], xaxis=:log, yaxis=:log, label="RK2")
+
+ppw = 1:40
+plot!(inv.(omega * ppw), [compute_err(RK4(), omega, ppw) for ppw in ppw], xaxis=:log, yaxis=:log, label="RK4")
