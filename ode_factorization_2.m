@@ -7,9 +7,9 @@ global omega
 
 %discrete values
 
-omega = 10 * pi;     %wavelength
+omega = 25 * pi;     %wavelength
 
-ppw = 100;     %points per wavelength
+ppw = 20;     %points per wavelength
 
 dt = 1 / (omega * ppw);     %time spacing
 
@@ -19,7 +19,7 @@ Nsteps = ceil(FinalTime / dt);     %total number of time steps
 
 dt = FinalTime / Nsteps;     %recalculate time spacing
 
-t = linspace(1e-14, FinalTime, Nsteps)';     %array of time steps
+t = linspace(1e-14, FinalTime, Nsteps+1)';     %array of time steps
 
 
 %error plotting
@@ -29,25 +29,27 @@ err = v_final - p(t);
 
 t2 = linspace(0, FinalTime, Nsteps);
 
-err_re = max(abs(real(err)));
+max(abs(err))
 
-err_im = max(abs(imag(err)));
-
-figure(1)
-plot(t, real(p(t2)))
-hold on
-plot(t,real(v_final))
-title(['real part, ', num2str(err_re),' is real error'])
-legend('true solution','sweep solution')
-hold off
-
-
-figure(2)
-plot(t, imag(p(t2)))
-hold on
-plot(t,imag(v_final))
-title(['real part, ', num2str(err_im),' is imaginary error'])
-legend('true solution','sweep solution')
+% err_re = max(abs(real(err)));
+% 
+% err_im = max(abs(imag(err)));
+% 
+% figure(1)
+% plot(t, real(p(t2)))
+% hold on
+% plot(t,real(v_final))
+% title(['real part, ', num2str(err_re),' is real error'])
+% legend('true solution','sweep solution')
+% hold off
+% 
+% 
+% figure(2)
+% plot(t, imag(p(t2)))
+% hold on
+% plot(t,imag(v_final))
+% title(['real part, ', num2str(err_im),' is imaginary error'])
+% legend('true solution','sweep solution')
 
 
 

@@ -81,8 +81,7 @@ function sweep(::RK4, params)
         v[i-1] = v[i] + dt * (1/6) * (dv1 + 2*dv2 + 2*dv3 + dv4)        
     end
 
-    vb = copy(v)
-    # @show norm(vb)
+    vb = copy(v)    
 
     # forward sweep with backwards sweep vb as source
     v = zeros(ComplexF64, Nsteps)
