@@ -2,8 +2,8 @@ using SpecialFunctions
 using OrdinaryDiffEq
 using ForwardDiff
 
-kappa = 100 # * pi
-r0 = 1e-11
+kappa = 50 * pi
+r0 = 1e-12
 R = .25 # b(R) is the error threshhold
 
 b(r) = -1.5 * exp(-160 * (r)^2)
@@ -12,7 +12,7 @@ b(r) = -1.5 * exp(-160 * (r)^2)
 #  u' = v
 # -v' = (1 / r) * v + [-l^2 / r^2 + (1 - b(r)) * kappa] * u_l
 # up = @(r,u) [u(2); (l^2./r.^2-om^2*(1-b(r)))*u(1) - u(2)./r];
-function rhs!(du, u, p, r)    
+function rhs_radial!(du, u, p, r)    
     (; l, b, kappa) = p
     u_l, v = u[1], u[2]
     du[1] = v 
@@ -30,7 +30,7 @@ function compute_scattering_phase(l, kappa, r0, R)
     
     # solve ODE 
     tspan = (r0, R)
-    ode = ODEProblem(rhs!, u0, tspan, parameters)
+    ode = ODEProblem(rhs_radial!, u0, tspan, parameters)
     sol = solve(ode, Vern7(); save_everystep=false, abstol=1e-14, reltol=1e-14)
 
     # compute scattering phases
@@ -75,22 +75,21 @@ end
 
 sc = ScatteringExpansion(kappa; L=40)
 
-x = 1
-y = 0.5
-θ = atan.(y, x)
-r = @. sqrt(x^2 + y^2)
-u = sc(r, θ)
+# x = 1
+# y = 0.5
+# θ = atan.(y, x)
+# r = @. sqrt(x^2 + y^2)
+# u = sc(r, θ)
 
-using Plots: Plots
+# using Plots: Plots
 
-xx = LinRange(-.5, .5, 250)
-yy = LinRange(-.5, .5, 250)
-x = @. xx + 0 * yy'; 
-y = @. 0 * xx + yy'; 
-θ = atan.(y, x)
-r = @. sqrt(x^2 + y^2)
-u = sc.(r, θ)
-u[@. r < R] .= NaN
-Plots.contourf(xx, yy, real.(u)', leg=false, clims=(-2.5, 2.5), c=:viridis, ratio=1)
+# xx = LinRange(-.5, .5, 250)
+# yy = LinRange(-.5, .5, 250)
+# xx = @. xx + 0 * yy'; 
+# yy = @. 0 * xx + yy'; 
+# θ = atan.(yy, xx)
+# r = @. sqrt(xx^2 + y^2)
+# u = sc.(r, θ)
+# u[@. r < R] .= NaN
+# Plots.contourf(xx, yy, real.(u)', leg=false, clims=(-2.5, 2.5), c=:viridis, ratio=1)
 
-# # Plots.plot(x, real.(exp.(im * kappa * x) - pw_expansion.(x, θ)), leg=false)
