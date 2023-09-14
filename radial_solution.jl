@@ -2,9 +2,9 @@ using SpecialFunctions
 using OrdinaryDiffEq
 using ForwardDiff
 
-kappa = 50 * pi
+kappa = 25 * pi
 r0 = 1e-12
-R = .25 # b(R) is the error threshhold
+R = .2 # b(R) is the error threshhold
 
 b(r) = -1.5 * exp(-160 * (r)^2)
 

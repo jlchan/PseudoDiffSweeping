@@ -70,20 +70,29 @@ A, y, w1D = assemble_FE_matrix(N, num_elements, domain_height)
 
 include("radial_solution.jl")
 
-OMEGA = kappa   # Angular frequency, kappa defined in radial_solution.jl
-PPWx  = 10      # Points per wavelength in x-direction (marching)
-ORDER = 3       # Pseudo-diff order
+OMEGA = kappa       # Angular frequency, kappa defined in radial_solution.jl
+PPWx  = 20          # Points per wavelength in x-direction (marching)
+ORDER = 4           # Pseudo-diff order
+num_iters = 2       # Number of sweeping iterations
+interval = 500
 
 Nx = ceil(Int, domain_width * OMEGA * PPWx)
 Ny = length(y)
 x = LinRange(-0.5, -0.5 + domain_width, Nx + 1)
 dx = x[2] - x[1]
 
+# 2D quadrature weights
+w = repeat(w1D, 1, Nx+1)
+w = domain_width * domain_height * w / sum(w) 
+
 b(x,y) = b(sqrt(x^2 + y^2)) # b should be given by "radial_solution.jl"
 one_minus_b = (x,y) -> 1 - b(x,y) # OMEGA^2 * (1 - b(x)) <---> OMEGA^2 / c^2
 c(x,y) = 1 / sqrt(one_minus_b(x, y)) # (1 - b(x)) = 1/c^2 ------> c = 1 / sqrt(1-b(x))
 
-# c(x,y) = 1
+# # c(x,y) = 1
+# smooth_heaviside(x, s = 1/10) = 1 / (1 + exp(-x/s))        
+# c(x,y) = 1.0 + 1e-7 * smooth_heaviside( -sqrt((x-0)^2 + (y-0)^2) + 0.1)
+# c(x,y) = 1.0 + 0.1 * exp(-25 * (x^2 + y^2))
 
 d_inv_c2(x, y) = ForwardDiff.derivative(x -> 1 / c(x, y)^2, x)
 d2_inv_c2(x, y) = ForwardDiff.derivative(x -> d_inv_c2(x, y), x)    
@@ -98,16 +107,16 @@ function set_c_data!(p, x)
     @. c_data.d2_inv_c2 = d2_inv_c2(x, y)
 end
 
-# manufactured plane wave solution
-u_exact(x, y) = exp(1im * OMEGA * x)
+# # manufactured plane wave solution
+# u_exact(x, y) = exp(1im * OMEGA * x)
 
-# manufactured plane wave solution variables
-dudx_exact(x, y) = exp(1im * OMEGA * x) * 1im * OMEGA 
-dudy_exact(x, y) = zero(eltype(x)) 
-d2udx2_exact(x, y) = -exp(1im * OMEGA * x) * OMEGA^2  
-d2udy2_exact(x, y) = zero(eltype(x)) 
-laplacian_u_exact(x, y) = d2udx2_exact(x, y) + d2udy2_exact(x, y)
-forcing = (x, y) -> (OMEGA^2  / c(x, y)^2) * u_exact(x, y) + laplacian_u_exact(x, y)
+# # manufactured plane wave solution variables
+# dudx_exact(x, y) = exp(1im * OMEGA * x) * 1im * OMEGA 
+# dudy_exact(x, y) = zero(eltype(x)) 
+# d2udx2_exact(x, y) = -exp(1im * OMEGA * x) * OMEGA^2  
+# d2udy2_exact(x, y) = zero(eltype(x)) 
+# laplacian_u_exact(x, y) = d2udx2_exact(x, y) + d2udy2_exact(x, y)
+# forcing = (x, y) -> (OMEGA^2  / c(x, y)^2) * u_exact(x, y) + laplacian_u_exact(x, y)
 
 # radial scattering solution
 function u_exact(x, y)
@@ -124,156 +133,171 @@ u_initial(x, y) = exp(1im * OMEGA * x)
 
 cache = (; OMEGA, ORDER, A, c_data, y, pade_coeffs=pade_coefficients(ORDER))
 
-# preallocate u, v, RHS
-u = zeros(Complex{eltype(y)}, Ny, Nx + 1)
-v = fill!(similar(u), zero(eltype(u)))
+# # # 2nd order 2nd derivative matrix
+# A_x = (1 / dx^2) * spdiagm(0 => -2 * ones(Nx + 1), 1 => ones(Nx), -1 => ones(Nx))
+# A_x[1, 1:4] .= [2, -5, 4, -1] / dx^2
+# A_x[end, end-3:end] .= [-1, 4, -5, 2] / dx^2
 
-# reference u 
-u_init = u_initial.(x', y)
-
-# 2nd order 2nd derivative matrix
-A_x = (1 / dx^2) * spdiagm(0 => -2 * ones(Nx + 1), 1 => ones(Nx), -1 => ones(Nx))
-A_x[1, 1:4] .= [2, -5, 4, -1] / dx^2
-A_x[end, end-3:end] .= [-1, 4, -5, 2] / dx^2
-
-# # 4th order 2nd derivative matrix - to match the order of RK4
-# A_x = (1 / dx^2) * spdiagm(0 => -5/2 * ones(Nx + 1), 
-#                            1 => 4/3 * ones(Nx),  2 => -1/12 * ones(Nx-1), 
-#                           -1 => 4/3 * ones(Nx), -2 => -1/12 * ones(Nx-1))                          
-# A_x[1, 1:6] .= [15/4, -77/6, 107/6, -13, 61/12, -5/6] / dx^2
-# A_x[2, 1:7] .= [0, 15/4, -77/6, 107/6, -13, 61/12, -5/6] / dx^2
-# A_x[end-1, end-6:end] .= reverse([0, 15/4, -77/6, 107/6, -13, 61/12, -5/6] ) / dx^2
-# A_x[end, end-5:end] .= reverse([15/4, -77/6, 107/6, -13, 61/12, -5/6]) / dx^2
-
-# compute (Δu + ω^2 / c^2 * u)
-Hu_init = (A * u_init + u_init * A_x') + (@. (OMEGA^2 / c(x', y)^2) * u_init)
-residual = f - Hu_init
-
-# local storage over a single time slice
-u_tmp, du, du_accum = ntuple(_ -> similar(u[:, 1]), 3)
+# 4th order 2nd derivative matrix - to match the order of RK4
+A_x = (1 / dx^2) * spdiagm(0 => -5/2 * ones(Nx + 1), 
+                           1 => 4/3 * ones(Nx),  2 => -1/12 * ones(Nx-1), 
+                          -1 => 4/3 * ones(Nx), -2 => -1/12 * ones(Nx-1))                          
+A_x[1, 1:6] .= [15/4, -77/6, 107/6, -13, 61/12, -5/6] / dx^2
+A_x[2, 1:7] .= [0, 15/4, -77/6, 107/6, -13, 61/12, -5/6] / dx^2
+A_x[end-1, end-6:end] .= reverse([0, 15/4, -77/6, 107/6, -13, 61/12, -5/6] ) / dx^2
+A_x[end, end-5:end] .= reverse([15/4, -77/6, 107/6, -13, 61/12, -5/6]) / dx^2
 
 function impose_homogeneous_BCs!(u, args...)
     # u[1] = zero(eltype(u))
     # u[end] = zero(eltype(u))
 end
 
-r_mid = similar(residual[:, 1])
-
-# temp memory for interpolation
-v_mid = similar(v[:,1])
-fill!(u, zero(eltype(u)))
-
 u_left(t) = u_exact(t, 0.5)
 u_right(t) = u_exact(t, -0.5)
 function impose_BCs!(u, t)
-    u[1] = 0
-    u[end] = 0
+    # u[1] = zero(eltype(u))
+    # u[end] = zero(eltype(u))
     # u[1] = u_left(t)
     # u[end] = u_right(t)
 end
 
+# preallocate u, v, RHS
+u = zeros(Complex{eltype(y)}, Ny, Nx + 1)
+v = similar(u)
 
-# backwards sweep to "pick up" the forcing
-for i in Nx + 1:-1:2
-    fill!(du_accum, zero(eltype(du_accum)))
+# local storage over a single time slice
+u_tmp, du, du_accum = ntuple(_ -> similar(u[:, 1]), 3)
 
-    # interpolate to midpoint between x[i-1] and x[i]
-    if i > 3 # < Nx - 2
-        @. r_mid = 0.0625 * residual[:, i-3] - 0.3125 * residual[:, i-2] + 0.9375 * residual[:, i-1] + 0.3125 * residual[:, i]
-    else # if i==2
-        @. r_mid = 0.3125 * residual[:, i-1] + 0.9375  * residual[:, i] - 0.3125 * residual[:, i+1] +  0.0625 * residual[:, i+2]
+# temp memory for interpolation
+r_mid, v_mid = similar(u[:, 1]), similar(u[:,1])
+
+# "background" solution u
+u_init = ((x, y) -> exp(1im * OMEGA * x)).(x', y)
+fill!(u, zero(eltype(u)))
+fill!(v, zero(eltype(v)))
+
+
+# # !!! TESTING
+# Hu_init = (A * u_init + u_init * A_x') #+ (@. (OMEGA^2 / c(x', y)^2) * u_init)
+# Hu_exact = d2udx2_exact.(x', y) + d2udy2_exact.(x', y) #+ (@. (OMEGA^2 / c(x', y)^2) * u_init)
+
+for i = 1:num_iters
+
+    println("On iteration $i")
+
+    # compute (Δu + ω^2 / c^2 * u)
+    u_init += u
+    fill!(v, zero(eltype(v)))
+    #           d2u/dy2       d2u/dx2
+    Hu_init = (A * u_init + u_init * A_x') + (@. (OMEGA^2 / c(x', y)^2) * u_init)
+    residual = f - Hu_init
+
+    residual_norm = sum(w .* abs2.(residual))
+    @show residual_norm
+
+    # backwards sweep to "pick up" the forcing
+    for i in Nx + 1:-1:2
+        fill!(du_accum, zero(eltype(du_accum)))
+
+        # interpolate to midpoint between x[i-1] and x[i]
+        if i > 3 # < Nx - 2
+            @. r_mid = 0.0625 * residual[:, i-3] - 0.3125 * residual[:, i-2] + 0.9375 * residual[:, i-1] + 0.3125 * residual[:, i]
+        else # if i==2
+            @. r_mid = 0.3125 * residual[:, i-1] + 0.9375  * residual[:, i] - 0.3125 * residual[:, i+1] +  0.0625 * residual[:, i+2]
+        end
+        
+        rhs!(du, v[:,i], cache, x[i]) 
+        @. du = du - residual[:, i] 
+        @. du_accum += du
+
+        @. u_tmp = v[:,i] + 0.5 * dx * du
+        impose_homogeneous_BCs!(u_tmp)
+        rhs!(du, u_tmp, cache, x[i] - 0.5 * dx) 
+        @. du = du - r_mid
+        @. du_accum += 2 * du
+
+        @. u_tmp = v[:,i] + 0.5 * dx * du
+        impose_homogeneous_BCs!(u_tmp)
+        rhs!(du, u_tmp, cache, x[i] - 0.5 * dx) 
+        @. du = du - r_mid
+        @. du_accum += 2 * du
+
+        @. u_tmp = v[:,i] + dx * du
+        impose_homogeneous_BCs!(u_tmp)
+        rhs!(du, u_tmp, cache, x[i-1]) 
+        @. du = du - residual[:, i-1]
+        @. du_accum += du
+        
+        @. v[:,i-1] = v[:,i] + (dx / 6) * du_accum
+        impose_homogeneous_BCs!(view(v, :, i-1))
+        if i % interval == 0
+            println("On step $i out of $(Nx-1)")
+        end
     end
-    
-    rhs!(du, v[:,i], cache, x[i]) 
-    @. du = du - residual[:, i] 
-    @. du_accum += du
 
-    @. u_tmp = v[:,i] + 0.5 * dx * du
-    impose_homogeneous_BCs!(u_tmp)
-    rhs!(du, u_tmp, cache, x[i] - 0.5 * dx) 
-    @. du = du - r_mid
-    @. du_accum += 2 * du
+    # forward sweep to incorporate v
+    for i in 1:Nx
 
-    @. u_tmp = v[:,i] + 0.5 * dx * du
-    impose_homogeneous_BCs!(u_tmp)
-    rhs!(du, u_tmp, cache, x[i] - 0.5 * dx) 
-    @. du = du - r_mid
-    @. du_accum += 2 * du
+        # interpolate to midpoint between x[i] and x[i+1]
+        if i < Nx - 2
+            @. v_mid = 0.3125 * v[:, i] + 0.9375 * v[:, i+1] - 0.3125 * v[:, i+2] + 0.0625 * v[:, i+3]
+        else # if i == Nx-1 or Nx
+            @. v_mid = 0.0625 * v[:, i-2] - 0.3125 * v[:, i-1] + 0.9375 * v[:, i] + 0.3125 * v[:, i+1]
+        end
 
-    @. u_tmp = v[:,i] + dx * du
-    impose_homogeneous_BCs!(u_tmp)
-    rhs!(du, u_tmp, cache, x[i-1]) 
-    @. du = du - residual[:, i-1]
-    @. du_accum += du
-    
-    @. v[:,i-1] = v[:,i] + (dx / 6) * du_accum
-    impose_homogeneous_BCs!(view(v, :, i-1))
-    if i % 100 == 0
-        println("On step $i out of $(Nx-1)")
+        fill!(du_accum, zero(eltype(du_accum)))
+        
+        rhs!(du, u[:,i], cache, x[i]) 
+        @. du = du + v[:, i]
+        @. du_accum += du  
+
+        @. u_tmp = u[:,i] + 0.5 * dx * du
+        impose_BCs!(u_tmp, x[i] + 0.5 * dx)    
+        rhs!(du, u_tmp, cache, x[i] + 0.5 * dx) 
+        @. du = du + v_mid
+        @. du_accum += 2 * du
+
+        @. u_tmp = u[:,i] + 0.5 * dx * du
+        impose_BCs!(u_tmp, x[i] + 0.5 * dx)
+        rhs!(du, u_tmp, cache, x[i] + 0.5 * dx) 
+        @. du = du + v_mid
+        @. du_accum += 2 * du
+
+        @. u_tmp = u[:,i] + dx * du
+        impose_BCs!(u_tmp, x[i+1])
+        rhs!(du, u_tmp, cache, x[i+1]) 
+        @. du = du + v[:, i+1]
+        @. du_accum += du 
+
+        @. u[:,i+1] = u[:,i] + (dx / 6) * du_accum
+        impose_BCs!(view(u, :, i+1), x[i+1])
+        
+        if i % interval == 0
+            println("On step $i out of $(Nx-1)")
+        end
     end
+
+    # uex = u_exact.(x', y) 
+    # uex[@. sqrt((x')^2 + y^2) < R] .= NaN
+    # error = (u_init + u) - u_exact.(x', y)
+    # error[isnan.(error)] .= 0.0
+    # L2_error = sqrt(dot(w, @. abs(error)^2))    
+    # @show L2_error
 end
 
-# forward sweep to incorporate v
-for i in 1:Nx
-
-    # interpolate to midpoint between x[i] and x[i+1]
-    if i < Nx - 2
-        @. v_mid = 0.3125 * v[:, i] + 0.9375 * v[:, i+1] - 0.3125 * v[:, i+2] + 0.0625 * v[:, i+3]
-    else # if i == Nx-1 or Nx
-        @. v_mid = 0.0625 * v[:, i-2] - 0.3125 * v[:, i-1] + 0.9375 * v[:, i] + 0.3125 * v[:, i+1]
-    end
-
-    fill!(du_accum, zero(eltype(du_accum)))
-    
-    rhs!(du, u[:,i], cache, x[i]) 
-    @. du = du + v[:, i]
-    @. du_accum += du  
-
-    @. u_tmp = u[:,i] + 0.5 * dx * du
-    impose_BCs!(u_tmp, x[i] + 0.5 * dx)    
-    rhs!(du, u_tmp, cache, x[i] + 0.5 * dx) 
-    @. du = du + v_mid
-    @. du_accum += 2 * du
-
-    @. u_tmp = u[:,i] + 0.5 * dx * du
-    impose_BCs!(u_tmp, x[i] + 0.5 * dx)
-    rhs!(du, u_tmp, cache, x[i] + 0.5 * dx) 
-    @. du = du + v_mid
-    @. du_accum += 2 * du
-
-    @. u_tmp = u[:,i] + dx * du
-    impose_BCs!(u_tmp, x[i+1])
-    rhs!(du, u_tmp, cache, x[i+1]) 
-    @. du = du + v[:, i+1]
-    @. du_accum += du 
-
-    @. u[:,i+1] = u[:,i] + (dx / 6) * du_accum
-    impose_BCs!(view(u, :, i+1), x[i+1])
-    
-    if i % 100 == 0
-        println("On step $i out of $(Nx-1)")
-    end
-end
-
-# # # add background u
-# u += u_init
-
-uex = u_exact.(x', y) 
-uex[@. sqrt((x')^2 + y^2) < R] .= NaN
-error = (u_init + u) - u_exact.(x', y)
-w = repeat(w1D, 1, Nx+1)
-w = domain_width * domain_height * w / sum(w) 
-L2_error = sqrt(dot(w, @. abs(error)^2))
-@show L2_error
-
-# u_incident(x, y) = exp(1im * OMEGA * x)
-# @. u -= u_incident(x', y)
-# @. uex -= u_incident(x', y)
+Hu_init = (A * (u + u_init) + (u + u_init) * A_x') + (@. (OMEGA^2 / c(x', y)^2) * (u + u_init))
+residual = f - Hu_init
+residual_norm = sum(w .* abs2.(residual))
+@show residual_norm
 
 using Plots: Plots
+uex = u_exact.(x', y) 
+uex[@. sqrt((x')^2 + y^2) < R] .= NaN
 
-p1 = Plots.contourf(x, y, real.(u_init + u), c=:viridis, clims=(-4, 4), leg=false, ratio=1, title="Sweeping")
-p2 = Plots.contourf(x, y, real.(uex), c=:viridis,  clims=(-4, 4), leg=false, ratio=1, title="Analytical")
+p1 = Plots.contourf(x, y, real.(u_init + u), c=:viridis, leg=false, ratio=1, title="Sweeping", clims=(-2.5, 2.5))
+# p1 = Plots.contourf(x, y, real.(u_init), c=:viridis, clims=(-4, 4), leg=false, ratio=1, title="Sweeping")
+p2 = Plots.contourf(x, y, real.(uex), c=:viridis, clims=(-2.5, 2.5), leg=false, ratio=1, title="Analytical")
 Plots.plot(p1, p2)
 
-# Plots.contourf(x, y, abs.(uex-u), c=:viridis, leg=false, ratio=1, title="Error", colorbar=true)
+Plots.contourf(x, y, abs.(uex-(u_init + u)), c=:viridis, leg=false, ratio=1, title="Error", colorbar=true)
+
