@@ -71,9 +71,9 @@ A, y, w1D = assemble_FE_matrix(N, num_elements, domain_height)
 include("radial_solution.jl")
 
 OMEGA = kappa       # Angular frequency, kappa defined in radial_solution.jl
-PPWx  = 20          # Points per wavelength in x-direction (marching)
+PPWx  = 50          # Points per wavelength in x-direction (marching)
 ORDER = 4           # Pseudo-diff order
-num_iters = 2       # Number of sweeping iterations
+num_iters = 5       # Number of sweeping iterations
 interval = 500
 
 Nx = ceil(Int, domain_width * OMEGA * PPWx)
@@ -154,11 +154,9 @@ end
 
 u_left(t) = u_exact(t, 0.5)
 u_right(t) = u_exact(t, -0.5)
-function impose_BCs!(u, t)
-    # u[1] = zero(eltype(u))
-    # u[end] = zero(eltype(u))
-    # u[1] = u_left(t)
-    # u[end] = u_right(t)
+function impose_BCs!(delta_u, u, t)
+    delta_u[1] = u_left(t) - u[1]
+    delta_u[end] = u_right(t) - u[end]
 end
 
 # preallocate u, v, RHS
@@ -174,26 +172,27 @@ r_mid, v_mid = similar(u[:, 1]), similar(u[:,1])
 # "background" solution u
 u_init = ((x, y) -> exp(1im * OMEGA * x)).(x', y)
 fill!(u, zero(eltype(u)))
-fill!(v, zero(eltype(v)))
-
 
 # # !!! TESTING
 # Hu_init = (A * u_init + u_init * A_x') #+ (@. (OMEGA^2 / c(x', y)^2) * u_init)
 # Hu_exact = d2udx2_exact.(x', y) + d2udy2_exact.(x', y) #+ (@. (OMEGA^2 / c(x', y)^2) * u_init)
 
+Hu_init = (A * (u_init) + (u_init) * A_x') + (@. (OMEGA^2 / c(x', y)^2) * (u_init))
+residual = f - Hu_init
+residual_norm = sum(w .* abs2.(residual))
+@show residual_norm
+
 for i = 1:num_iters
 
-    println("On iteration $i")
+    #println("On iteration $i")
 
     # compute (Δu + ω^2 / c^2 * u)
-    u_init += u
+    global u_init = u + u_init;
     fill!(v, zero(eltype(v)))
     #           d2u/dy2       d2u/dx2
-    Hu_init = (A * u_init + u_init * A_x') + (@. (OMEGA^2 / c(x', y)^2) * u_init)
-    residual = f - Hu_init
 
-    residual_norm = sum(w .* abs2.(residual))
-    @show residual_norm
+    Hu_init = (A * (u_init) + (u_init) * A_x') + (@. (OMEGA^2 / c(x', y)^2) * (u_init))
+    residual = f - Hu_init
 
     # backwards sweep to "pick up" the forcing
     for i in Nx + 1:-1:2
@@ -231,7 +230,7 @@ for i = 1:num_iters
         @. v[:,i-1] = v[:,i] + (dx / 6) * du_accum
         impose_homogeneous_BCs!(view(v, :, i-1))
         if i % interval == 0
-            println("On step $i out of $(Nx-1)")
+            #println("On step $i out of $(Nx-1)")
         end
     end
 
@@ -241,8 +240,10 @@ for i = 1:num_iters
         # interpolate to midpoint between x[i] and x[i+1]
         if i < Nx - 2
             @. v_mid = 0.3125 * v[:, i] + 0.9375 * v[:, i+1] - 0.3125 * v[:, i+2] + 0.0625 * v[:, i+3]
+            u_init_mid = 0.3125 * u_init[:, i] + 0.9375 * u_init[:, i+1] - 0.3125 * u_init[:, i+2] + 0.0625 * u_init[:, i+3]            
         else # if i == Nx-1 or Nx
             @. v_mid = 0.0625 * v[:, i-2] - 0.3125 * v[:, i-1] + 0.9375 * v[:, i] + 0.3125 * v[:, i+1]
+            u_init_mid = 0.0625 * u_init[:, i-2] - 0.3125 * u_init[:, i-1] + 0.9375 * u_init[:, i] + 0.3125 * u_init[:, i+1]
         end
 
         fill!(du_accum, zero(eltype(du_accum)))
@@ -252,52 +253,53 @@ for i = 1:num_iters
         @. du_accum += du  
 
         @. u_tmp = u[:,i] + 0.5 * dx * du
-        impose_BCs!(u_tmp, x[i] + 0.5 * dx)    
+        impose_BCs!(u_tmp, u_init_mid, x[i] + 0.5 * dx)    
         rhs!(du, u_tmp, cache, x[i] + 0.5 * dx) 
         @. du = du + v_mid
         @. du_accum += 2 * du
 
         @. u_tmp = u[:,i] + 0.5 * dx * du
-        impose_BCs!(u_tmp, x[i] + 0.5 * dx)
+        impose_BCs!(u_tmp, u_init_mid, x[i] + 0.5 * dx)
         rhs!(du, u_tmp, cache, x[i] + 0.5 * dx) 
         @. du = du + v_mid
         @. du_accum += 2 * du
 
         @. u_tmp = u[:,i] + dx * du
-        impose_BCs!(u_tmp, x[i+1])
+        impose_BCs!(u_tmp, view(u_init, :, i+1), x[i+1])
         rhs!(du, u_tmp, cache, x[i+1]) 
         @. du = du + v[:, i+1]
         @. du_accum += du 
 
         @. u[:,i+1] = u[:,i] + (dx / 6) * du_accum
-        impose_BCs!(view(u, :, i+1), x[i+1])
+        impose_BCs!(view(u, :, i+1), view(u_init, :, i+1), x[i+1])
         
         if i % interval == 0
-            println("On step $i out of $(Nx-1)")
+            #println("On step $i out of $(Nx-1)")
         end
     end
 
-    # uex = u_exact.(x', y) 
-    # uex[@. sqrt((x')^2 + y^2) < R] .= NaN
-    # error = (u_init + u) - u_exact.(x', y)
-    # error[isnan.(error)] .= 0.0
-    # L2_error = sqrt(dot(w, @. abs(error)^2))    
-    # @show L2_error
+    Hu_init = (A * (u + u_init) + (u + u_init) * A_x') + (@. (OMEGA^2 / c(x', y)^2) * (u + u_init))
+    residual = f - Hu_init
+    residual_norm = sum(w .* abs2.(residual))
+    #@show residual_norm
+
+     uex = u_exact.(x', y) 
+     uex[@. sqrt((x')^2 + y^2) < R] .= NaN
+     error = (u_init + u) - uex
+     error[isnan.(error)] .= 0.0
+     L2_error = sqrt(dot(w, @. abs(error)^2))
+     #L2 error remains stationary if using u_exact    
+     @show L2_error
 end
 
-Hu_init = (A * (u + u_init) + (u + u_init) * A_x') + (@. (OMEGA^2 / c(x', y)^2) * (u + u_init))
-residual = f - Hu_init
-residual_norm = sum(w .* abs2.(residual))
-@show residual_norm
+#using Plots: Plots
+#uex = u_exact.(x', y) 
+#uex[@. sqrt((x')^2 + y^2) < R] .= NaN
 
-using Plots: Plots
-uex = u_exact.(x', y) 
-uex[@. sqrt((x')^2 + y^2) < R] .= NaN
+#p1 = Plots.contourf(x, y, real.(u_init + u), c=:viridis, leg=false, ratio=1, title="Sweeping", clims=(-2.5, 2.5))
+#p1 = Plots.contourf(x, y, real.(u_init), c=:viridis, clims=(-4, 4), leg=false, ratio=1, title="Sweeping")
+#p2 = Plots.contourf(x, y, real.(uex), c=:viridis, clims=(-2.5, 2.5), leg=false, ratio=1, title="Analytical")
+#Plots.plot(p1, p2)
 
-p1 = Plots.contourf(x, y, real.(u_init + u), c=:viridis, leg=false, ratio=1, title="Sweeping", clims=(-2.5, 2.5))
-# p1 = Plots.contourf(x, y, real.(u_init), c=:viridis, clims=(-4, 4), leg=false, ratio=1, title="Sweeping")
-p2 = Plots.contourf(x, y, real.(uex), c=:viridis, clims=(-2.5, 2.5), leg=false, ratio=1, title="Analytical")
-Plots.plot(p1, p2)
-
-Plots.contourf(x, y, abs.(uex-(u_init + u)), c=:viridis, leg=false, ratio=1, title="Error", colorbar=true)
+#Plots.contourf(x, y, abs.(uex-(u_init + u)), c=:viridis, leg=false, ratio=1, title="Error", colorbar=true)
 
